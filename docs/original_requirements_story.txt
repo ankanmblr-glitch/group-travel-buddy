@@ -1,0 +1,20 @@
+[A]Introduction: I am planning to build an app which is about connecting, communicating and collaborating between different participants in a road trip.
+
+[B]Problem statement : As a traveller, I frequently drive to different places and sometimes my friends accompany me in their own cars. We use a lot of different tools and communication channels to convey information about the roadtrip while we are on our way. Example:              
+We use google maps for navigation to the destination. 
+We use Whatsapp live location to share our location so that we know who is at which location.
+We use Whatspp chat to communicate, but typing on whatsapp chat is difficult while each of us is driving.
+For photo sharing, we create a google drive folder and give access to the folder to all participants. Each of us upload are travel photos and videos to the shared google drive folder.
+For splitting expenses incurred during the roadtrip, we use google pay.
+
+[C]Solution design: 
+   Instead of using so many different tools in a roadtrip, I want to build a single app which will work as an interface or a single window to the same tools. The app wil have following sections :
+This app will contain the google map link to the destination. Clicking on the link will open google maps (mobile phone app if available or maps.google.com site) . When Google maps open from think link, these 3 values will be defaulted. From: Your location and  To: Destination Location. Transport : Car
+The second section will display an infolet window. This infolet window will show google maps and show the locations of all the participants. Pre-requisite: Before start of the trip, all the participants will share locations with each other in google maps.
+The third section: The most difficult part of any road trip is live communication between participants in different cars. I want to use Zello app for this. It is a push-to-talk app. I need a dedicated button in the new app which will be used as a PTT button. Pressing and talking in this app will send audio message using Zello in the background.
+The fourth section: This is simple. Create a ‘select files’ and a ‘upload’ button here. When user clicks on ‘select files’ button, the user will be allowed to select multiple photos and vidoes from his/her phone gallery. After user clicks on ‘upload’, those image and video files will be uploaded to the shared folder in google drive.
+The fifth section deals with recording expenses made with who has paid for what. We are 6 friends with names AA, BB, CC, DD, EE, FF. I need a way to have them enter their expenses on the trip (ex, common expenses like food, hotel, entry tickets etc) with expense description and expense amount to be entered. AA can enter & Edit the expense incurred by AA only , and can view but not edit others’ expenses. There should be a button called ‘Calculate’, which will calculate total expenses entered, how much has been spent by each person and how much does each person owe to another. Display these at the bottom of this section after calculating.
+
+[D] Suggestions needed : If you have any suggestions for improvement of this app or adding some additional functionality to make this app better, please do so. I also need suggestion on deploying the code to github, hosting it on streamlit and making it compatible with Android Auto screen and android screen mirror or casting apps.
+
+Please generate a formatted requirement document after reading the intended functionality of the Group Travel Buddy App. The formatted requirement document will be used as an input to a LLM to generate tuned prompts. The prompts will then be run by LLM to build the app. 

@@ -1,0 +1,10 @@
+{
+  "name": "group-travel-buddy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A lean, free, single-page PWA that acts as one window into Google Maps navigation, Google Maps location sharing, Zello push-to-talk, a shared Google Drive folder, and group expense splitting for occasional road trips.",
+  "scripts": {
+    "test": "node settlement-engine.test.js"
+  }
+}

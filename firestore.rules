@@ -1,0 +1,38 @@
+rules_version = '2';
+
+// Group Travel Buddy — Firestore security rules
+//
+// Model: anyone can read/use a trip if they know its trip code (the code
+// itself is the "invite" — same trust model as a WhatsApp group link).
+// Every device is anonymously authenticated (silent, no login screen), and
+// can only edit/delete the expenses IT created (ownerUid match), matching
+// the "AA can edit only AA's own expenses" requirement.
+//
+// Deploy with: firebase deploy --only firestore:rules
+// (after `firebase init firestore` — see README.md Part 6)
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /trips/{tripCode} {
+      allow read: if signedIn();
+      // Anyone can create a trip doc (claims a new trip code) or update
+      // shared trip details (destination, drive folder link) — low-stakes,
+      // trusted-friend-group app, so this stays intentionally permissive.
+      allow create, update: if signedIn();
+      allow delete: if false;
+
+      match /expenses/{expenseId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+                      && request.resource.data.ownerUid == request.auth.uid;
+        allow update, delete: if signedIn()
+                      && resource.data.ownerUid == request.auth.uid;
+      }
+    }
+  }
+}
