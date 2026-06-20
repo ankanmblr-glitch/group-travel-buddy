@@ -37,6 +37,7 @@ let unsubscribeExpenses = null;
 let unsubscribeTrip = null;
 let latestExpenses = [];
 let latestTripData = null;
+let isAdminMode = localStorage.getItem("gtb_adminMode") === "true";
 
 const statusPill = document.getElementById("connection-status");
 
@@ -54,6 +55,175 @@ onAuthStateChanged(auth, (user) => {
     });
   }
 });
+
+// ---- Admin toggle -----------------------------------------------------------
+const adminToggleBtn = document.getElementById("admin-toggle-btn");
+const adminCard = document.getElementById("admin-card");
+
+function applyAdminMode() {
+  adminCard.style.display = isAdminMode ? "block" : "none";
+  adminToggleBtn.classList.toggle("active", isAdminMode);
+  if (isAdminMode) renderAdminPanel();
+}
+
+adminToggleBtn.addEventListener("click", () => {
+  isAdminMode = !isAdminMode;
+  localStorage.setItem("gtb_adminMode", isAdminMode);
+  applyAdminMode();
+  if (isAdminMode) toast("Admin mode on — manage your trip members.");
+});
+
+applyAdminMode();
+
+// ---- Admin: member management -----------------------------------------------
+function getMemberContacts() {
+  const raw = localStorage.getItem("gtb_memberContacts");
+  return raw ? JSON.parse(raw) : {};
+}
+
+function saveMemberContact(name, info) {
+  const contacts = getMemberContacts();
+  contacts[name] = info;
+  localStorage.setItem("gtb_memberContacts", JSON.stringify(contacts));
+}
+
+function deleteMemberContact(name) {
+  const contacts = getMemberContacts();
+  delete contacts[name];
+  localStorage.setItem("gtb_memberContacts", JSON.stringify(contacts));
+}
+
+function renderAdminPanel() {
+  const list = document.getElementById("admin-member-list");
+  const names = getNameOptions();
+  const contacts = getMemberContacts();
+
+  if (names.length === 0) {
+    list.innerHTML = `<p class="hint">No members yet. Add some below.</p>`;
+    return;
+  }
+
+  list.innerHTML = names.map((name) => {
+    const c = contacts[name];
+    return `
+      <div class="admin-member-row" data-name="${escapeHtml(name)}">
+        <div>
+          <span class="member-name">${escapeHtml(name)}</span>
+          ${c ? `<span class="member-contact-hint">${escapeHtml(c.phone || c.email || "")}</span>` : ""}
+        </div>
+        <div class="member-actions">
+          ${c ? `<button class="btn-invite-member" data-action="invite" data-name="${escapeHtml(name)}">Invite</button>` : ""}
+          <button class="btn-edit-member"   data-action="edit"   data-name="${escapeHtml(name)}">Edit</button>
+          <button class="btn-delete-member" data-action="delete" data-name="${escapeHtml(name)}">✕</button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+document.getElementById("admin-member-list").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const name = btn.dataset.name;
+
+  if (action === "delete") {
+    const names = getNameOptions().filter((n) => n !== name);
+    saveNameOptions(names);
+    deleteMemberContact(name);
+    renderNameOptions();
+    renderAdminPanel();
+    toast(`${name} removed.`);
+
+  } else if (action === "edit") {
+    const newName = prompt(`Rename "${name}" to:`, name);
+    if (!newName || newName.trim() === name) return;
+    const trimmed = newName.trim();
+    const names = getNameOptions().map((n) => (n === name ? trimmed : n));
+    saveNameOptions(names);
+    // migrate contact info to new name
+    const contacts = getMemberContacts();
+    if (contacts[name]) {
+      contacts[trimmed] = contacts[name];
+      delete contacts[name];
+      localStorage.setItem("gtb_memberContacts", JSON.stringify(contacts));
+    }
+    renderNameOptions();
+    renderAdminPanel();
+    toast(`Renamed to ${trimmed}.`);
+
+  } else if (action === "invite") {
+    sendInvite(name);
+  }
+});
+
+document.getElementById("admin-add-btn").addEventListener("click", () => {
+  const input = document.getElementById("admin-new-name");
+  const name = input.value.trim();
+  if (!name) return toast("Enter a name first.");
+  const names = getNameOptions();
+  if (names.includes(name)) return toast(`${name} is already in the list.`);
+  names.push(name);
+  saveNameOptions(names);
+  renderNameOptions();
+  renderAdminPanel();
+  input.value = "";
+  toast(`${name} added.`);
+});
+
+document.getElementById("admin-contacts-btn").addEventListener("click", async () => {
+  if (!("contacts" in navigator && "ContactsManager" in window)) {
+    toast("Contact picker isn't supported on this browser. Try Chrome on Android.");
+    return;
+  }
+  try {
+    const results = await navigator.contacts.select(["name", "tel", "email"], { multiple: false });
+    if (!results || results.length === 0) return;
+
+    const contact = results[0];
+    const pickedName = (contact.name?.[0] || "").trim();
+    const phone = (contact.tel?.[0] || "").replace(/\s+/g, "");
+    const email = contact.email?.[0] || "";
+
+    if (!pickedName) return toast("Contact has no name — please add them manually.");
+
+    const names = getNameOptions();
+    if (!names.includes(pickedName)) {
+      names.push(pickedName);
+      saveNameOptions(names);
+      renderNameOptions();
+    }
+    if (phone || email) saveMemberContact(pickedName, { phone, email });
+    renderAdminPanel();
+    toast(`${pickedName} added. Sending invite…`);
+    sendInvite(pickedName);
+
+  } catch (err) {
+    toast("Couldn't open contacts: " + err.message);
+  }
+});
+
+function sendInvite(memberName) {
+  const tripCode = currentTripCode || "(ask organiser for code)";
+  const appUrl = "https://ankanmblr-glitch.github.io/group-travel-buddy/";
+  const message =
+    `Ankan has invited you on this new exciting road trip! 🚗\n` +
+    `Join us on Group Travel Buddy with trip code: *${tripCode}*\n` +
+    `Open the app here: ${appUrl}`;
+
+  const contacts = getMemberContacts();
+  const c = contacts[memberName];
+  const phone = c?.phone?.replace(/\D/g, "") || "";
+
+  if (phone) {
+    // Direct WhatsApp link to this contact's number
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
+  } else if (navigator.share) {
+    navigator.share({ text: message }).catch(() => {});
+  } else {
+    // Fallback: general WhatsApp share (user picks contact inside WhatsApp)
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
+  }
+}
 
 // ---- Helpers ---------------------------------------------------------------
 function toast(message) {
@@ -186,13 +356,18 @@ document.getElementById("open-maps-btn").addEventListener("click", () => {
 
 // ---- Zello launch ------------------------------------------------------------
 document.getElementById("open-zello-btn").addEventListener("click", () => {
-  const fallback = encodeURIComponent("https://play.google.com/store/apps/details?id=com.loudtalks");
-  const intentUrl = `intent://launch#Intent;package=com.loudtalks;S.browser_fallback_url=${fallback};end`;
-  // Try the Android intent launch; if this device/browser doesn't support
-  // intent: URIs (e.g. desktop testing), fall back to the Play Store link.
   const isAndroid = /Android/i.test(navigator.userAgent);
   if (isAndroid) {
-    window.location.href = intentUrl;
+    // Use Zello's custom URL scheme — launches the app directly if installed.
+    window.location.href = "zello://";
+    // If Zello isn't installed the page won't leave, so after 2 s redirect to
+    // the Play Store. If the app DID open the window loses focus first and we
+    // cancel the timer so the user isn't bounced to the Store on return.
+    const fallbackTimer = setTimeout(() => {
+      window.location.href =
+        "https://play.google.com/store/apps/details?id=com.loudtalks";
+    }, 2000);
+    window.addEventListener("blur", () => clearTimeout(fallbackTimer), { once: true });
   } else {
     window.open("https://zello.com/", "_blank");
   }

@@ -14,7 +14,10 @@
 
 <header class="app-header">
   <h1>🚗 Group Travel Buddy</h1>
-  <div id="connection-status" class="status-pill">connecting…</div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <div id="connection-status" class="status-pill">connecting…</div>
+    <button id="admin-toggle-btn" class="btn-admin-toggle" title="Admin: Manage Members">👑</button>
+  </div>
 </header>
 
 <main>
@@ -45,6 +48,24 @@
 
       <button id="save-trip-btn" class="btn-secondary">Save Trip Details</button>
     </div>
+  </section>
+
+  <!-- ADMIN: MEMBER MANAGEMENT -->
+  <section class="card" id="admin-card" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <h2 style="margin:0">👑 Members</h2>
+      <span class="admin-badge">Admin</span>
+    </div>
+    <p class="hint">Add, edit, or remove trip members. Use contacts to send them an invite on WhatsApp.</p>
+
+    <div id="admin-member-list"></div>
+
+    <div class="row-inline" style="margin-top:14px">
+      <input id="admin-new-name" type="text" placeholder="Member name" autocomplete="off" />
+      <button id="admin-add-btn" class="btn-icon">＋</button>
+    </div>
+
+    <button id="admin-contacts-btn" class="btn-secondary">📱 Add from Contacts &amp; Invite</button>
   </section>
 
   <!-- NAVIGATION -->

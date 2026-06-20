@@ -167,6 +167,79 @@ footer {
   padding: 20px 16px 0;
 }
 
+/* ---- Admin panel ---- */
+.btn-admin-toggle {
+  background: rgba(255,255,255,0.15);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 1rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.btn-admin-toggle.active { background: rgba(255,215,0,0.35); }
+
+.admin-badge {
+  font-size: 0.7rem;
+  background: #f39c12;
+  color: white;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.admin-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 0;
+  border-bottom: 1px solid #eee;
+  gap: 8px;
+}
+
+.admin-member-row .member-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.admin-member-row .member-contact-hint {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.admin-member-row .member-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.admin-member-row .member-actions button {
+  font-size: 0.78rem;
+  padding: 4px 9px;
+  border-radius: 7px;
+  font-weight: 600;
+  width: auto;
+  margin: 0;
+}
+
+.btn-invite-member  { background: #e8f5e9; color: #1e8449; }
+.btn-edit-member    { background: #eaf0fb; color: var(--primary); }
+.btn-delete-member  { background: #fdecea; color: var(--danger); }
+
+.btn-icon {
+  background: var(--primary);
+  color: white;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 1.1rem;
+  width: auto;
+  margin: 0;
+  flex-shrink: 0;
+}
+
 .toast {
   position: fixed;
   bottom: 20px;
