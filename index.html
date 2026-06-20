@@ -46,6 +46,23 @@
       <label for="drive-folder">Shared Google Drive folder link</label>
       <input id="drive-folder" type="url" placeholder="Paste the shared folder URL here" autocomplete="off" />
 
+      <div class="drive-tip" id="drive-tip" style="display:none">
+        <div class="drive-tip-row">
+          <span>
+            <strong>Option A — easiest:</strong> set this folder to
+            <em>"Anyone with the link can add files"</em> in Drive.
+            Everyone who gets the invite link can upload instantly, no extra step.
+          </span>
+          <button id="drive-open-share-btn" class="btn-drive-open">Open Drive →</button>
+        </div>
+        <div class="drive-tip-divider"></div>
+        <span class="drive-tip-b">
+          <strong>Option B — selective:</strong> keep the folder private and use
+          the <em>"📁 Share Drive"</em> button next to each member in the
+          👑 Admin panel to grant access one person at a time.
+        </span>
+      </div>
+
       <button id="save-trip-btn" class="btn-secondary">Save Trip Details</button>
     </div>
   </section>

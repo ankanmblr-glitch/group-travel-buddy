@@ -105,6 +105,7 @@ function renderAdminPanel() {
 
   list.innerHTML = names.map((name) => {
     const c = contacts[name];
+    const hasEmail = !!(c?.email);
     return `
       <div class="admin-member-row" data-name="${escapeHtml(name)}">
         <div>
@@ -113,6 +114,7 @@ function renderAdminPanel() {
         </div>
         <div class="member-actions">
           ${c ? `<button class="btn-invite-member" data-action="invite" data-name="${escapeHtml(name)}">Invite</button>` : ""}
+          ${hasEmail ? `<button class="btn-share-drive-member" data-action="share-drive" data-name="${escapeHtml(name)}" title="Option B: grant Drive access to ${escapeHtml(c.email)}">📁 Share</button>` : ""}
           <button class="btn-edit-member"   data-action="edit"   data-name="${escapeHtml(name)}">Edit</button>
           <button class="btn-delete-member" data-action="delete" data-name="${escapeHtml(name)}">✕</button>
         </div>
@@ -153,6 +155,28 @@ document.getElementById("admin-member-list").addEventListener("click", (e) => {
 
   } else if (action === "invite") {
     sendInvite(name);
+
+  } else if (action === "share-drive") {
+    // Option B: copy member's email to clipboard, then open the Drive folder
+    // so the admin can paste it into Drive's "Share" dialog in one step.
+    const c = getMemberContacts()[name];
+    const email = c?.email || "";
+    const driveUrl = latestTripData?.driveFolderUrl ||
+                     document.getElementById("drive-folder").value.trim();
+
+    if (!driveUrl) return toast("Save your Drive folder URL in Trip Setup first.");
+    if (!email)    return toast("No email stored for this member.");
+
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(email)
+        .then(() => toast(`📋 ${email} copied! Opening Drive — paste into the Share box.`))
+        .catch(() => toast(`Share with: ${email} — opening Drive now.`));
+    } else {
+      // Fallback for browsers without clipboard API
+      prompt(`Copy this email, then paste it into Drive's Share dialog:`, email);
+    }
+    // Small delay so the toast is visible before Drive opens
+    setTimeout(() => window.open(driveUrl, "_blank"), 600);
   }
 });
 
@@ -205,10 +229,16 @@ document.getElementById("admin-contacts-btn").addEventListener("click", async ()
 function sendInvite(memberName) {
   const tripCode = currentTripCode || "(ask organiser for code)";
   const appUrl = "https://ankanmblr-glitch.github.io/group-travel-buddy/";
+  const driveUrl = latestTripData?.driveFolderUrl ||
+                   document.getElementById("drive-folder").value.trim();
+  const driveSection = driveUrl
+    ? `\n📁 Access our shared photo folder: ${driveUrl}`
+    : "";
   const message =
     `Ankan has invited you on this new exciting road trip! 🚗\n` +
     `Join us on Group Travel Buddy with trip code: *${tripCode}*\n` +
-    `Open the app here: ${appUrl}`;
+    `Open the app here: ${appUrl}` +
+    driveSection;
 
   const contacts = getMemberContacts();
   const c = contacts[memberName];
@@ -302,16 +332,34 @@ async function joinTrip(code, opts = {}) {
     latestTripData = docSnap.data() || {};
     document.getElementById("destination").value = latestTripData.destination || "";
     document.getElementById("drive-folder").value = latestTripData.driveFolderUrl || "";
+    updateDriveTip();
   });
 
   subscribeExpenses(code);
 }
+
+// Show Drive tip box whenever the Drive folder URL field has a value
+function updateDriveTip() {
+  const url = document.getElementById("drive-folder").value.trim();
+  const tip = document.getElementById("drive-tip");
+  tip.style.display = url ? "block" : "none";
+}
+document.getElementById("drive-folder").addEventListener("input", updateDriveTip);
+
+// Option A: "Open Drive →" button opens the folder so admin can change sharing mode
+document.getElementById("drive-open-share-btn").addEventListener("click", () => {
+  const url = document.getElementById("drive-folder").value.trim() ||
+              latestTripData?.driveFolderUrl;
+  if (!url) return toast("Paste a Drive folder URL first.");
+  window.open(url, "_blank");
+});
 
 document.getElementById("save-trip-btn").addEventListener("click", async () => {
   if (!currentTripCode) return toast("Join a trip first.");
   const destination = document.getElementById("destination").value.trim();
   const driveFolderUrl = document.getElementById("drive-folder").value.trim();
   await updateDoc(doc(db, "trips", currentTripCode), { destination, driveFolderUrl });
+  updateDriveTip();
   toast("Trip details saved.");
 });
 
