@@ -1,524 +1,767 @@
 // ============================================================================
-// Group Travel Buddy — main app logic
-// Vanilla JS, no build step. Loaded as a module directly by index.html.
+// app.js — Group Travel Buddy v2
+// Role system: admin (?trip=X&admin=KEY) | participant (?trip=X&name=N) | setup
 // ============================================================================
 
-import { firebaseConfig } from "./firebase-config.js";
+import { firebaseConfig }    from "./firebase-config.js";
 import { calculateSettlement } from "./settlement-engine.js";
 
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import { getAuth, signInAnonymously, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import {
-  getAuth,
-  signInAnonymously,
-  onAuthStateChanged,
-} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
-import {
-  getFirestore,
-  doc,
-  getDoc,
-  setDoc,
-  collection,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  onSnapshot,
-  serverTimestamp,
+  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc,
+  collection, addDoc, getDocs, onSnapshot, serverTimestamp, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
-// ---- Firebase init ---------------------------------------------------------
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// ── Firebase init ───────────────────────────────────────────────────────────
+const fbApp = initializeApp(firebaseConfig);
+const auth  = getAuth(fbApp);
+const db    = getFirestore(fbApp);
 
-let currentUid = null;
-let currentTripCode = localStorage.getItem("gtb_tripCode") || "";
-let currentName = localStorage.getItem("gtb_name") || "";
-let unsubscribeExpenses = null;
-let unsubscribeTrip = null;
-let latestExpenses = [];
-let latestTripData = null;
-let isAdminMode = localStorage.getItem("gtb_adminMode") === "true";
+// ── URL-param role detection ────────────────────────────────────────────────
+const params   = new URLSearchParams(window.location.search);
+const urlTrip  = (params.get("trip")  || "").toLowerCase().trim();
+const urlAdmin = (params.get("admin") || "").trim();   // admin key
+const urlName  = (params.get("name")  || "").trim();   // participant name
 
+// role: "setup" | "admin" | "participant"
+let currentRole = urlTrip && urlAdmin ? "admin"
+                : urlTrip && urlName  ? "participant"
+                : "setup";
+
+// ── State ───────────────────────────────────────────────────────────────────
+let currentUid       = null;
+let currentTripCode  = urlTrip  || "";
+let currentName      = urlName  || "";    // participant's name (from URL)
+let latestExpenses   = [];
+let latestTripData   = null;
+let editingExpenseId = null;
+let unsubExpenses    = null;
+let unsubTrip        = null;
+
+const BASE_URL = window.location.origin + window.location.pathname;
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
 const statusPill = document.getElementById("connection-status");
 
-onAuthStateChanged(auth, (user) => {
+// ── Auth ────────────────────────────────────────────────────────────────────
+onAuthStateChanged(auth, async function(user) {
   if (user) {
     currentUid = user.uid;
     statusPill.textContent = "online";
-    statusPill.classList.add("online");
-    if (currentTripCode) joinTrip(currentTripCode, { silent: true });
+    statusPill.className   = "status-pill online";
+    await handleRoleInit();
   } else {
-    signInAnonymously(auth).catch((err) => {
+    signInAnonymously(auth).catch(function() {
       statusPill.textContent = "offline";
-      statusPill.classList.add("offline");
-      console.error("Anonymous sign-in failed:", err);
+      statusPill.className   = "status-pill offline";
     });
   }
 });
 
-// ---- Admin toggle -----------------------------------------------------------
-const adminToggleBtn = document.getElementById("admin-toggle-btn");
-const adminCard = document.getElementById("admin-card");
-
-function applyAdminMode() {
-  adminCard.style.display = isAdminMode ? "block" : "none";
-  adminToggleBtn.classList.toggle("active", isAdminMode);
-  if (isAdminMode) renderAdminPanel();
+// ── Role init ────────────────────────────────────────────────────────────────
+async function handleRoleInit() {
+  if (currentRole === "setup") {
+    showSetupMode();
+  } else if (currentRole === "admin") {
+    await verifyAndJoinAsAdmin();
+  } else {
+    await joinAsParticipant();
+  }
 }
 
-adminToggleBtn.addEventListener("click", () => {
-  isAdminMode = !isAdminMode;
-  localStorage.setItem("gtb_adminMode", isAdminMode);
-  applyAdminMode();
-  if (isAdminMode) toast("Admin mode on — manage your trip members.");
-});
-
-applyAdminMode();
-
-// ---- Admin: member management -----------------------------------------------
-function getMemberContacts() {
-  const raw = localStorage.getItem("gtb_memberContacts");
-  return raw ? JSON.parse(raw) : {};
+// ── SETUP MODE ───────────────────────────────────────────────────────────────
+function showSetupMode() {
+  document.getElementById("setup-card").classList.remove("hidden");
 }
 
-function saveMemberContact(name, info) {
-  const contacts = getMemberContacts();
-  contacts[name] = info;
-  localStorage.setItem("gtb_memberContacts", JSON.stringify(contacts));
-}
+document.getElementById("create-trip-btn").addEventListener("click", async function() {
+  var code = document.getElementById("setup-trip-code").value.toLowerCase().trim();
+  if (!code) { toast("Enter a trip code."); return; }
 
-function deleteMemberContact(name) {
-  const contacts = getMemberContacts();
-  delete contacts[name];
-  localStorage.setItem("gtb_memberContacts", JSON.stringify(contacts));
-}
+  var tripRef = doc(db, "trips", code);
+  var snap    = await getDoc(tripRef);
 
-function renderAdminPanel() {
-  const list = document.getElementById("admin-member-list");
-  const names = getNameOptions();
-  const contacts = getMemberContacts();
-
-  if (names.length === 0) {
-    list.innerHTML = `<p class="hint">No members yet. Add some below.</p>`;
+  if (snap.exists() && snap.data().adminKey) {
+    toast("Trip already exists. Use your admin link to access it.");
     return;
   }
 
-  list.innerHTML = names.map((name) => {
-    const c = contacts[name];
-    const hasEmail = !!(c?.email);
-    return `
-      <div class="admin-member-row" data-name="${escapeHtml(name)}">
-        <div>
-          <span class="member-name">${escapeHtml(name)}</span>
-          ${c ? `<span class="member-contact-hint">${escapeHtml(c.phone || c.email || "")}</span>` : ""}
-        </div>
-        <div class="member-actions">
-          ${c ? `<button class="btn-invite-member" data-action="invite" data-name="${escapeHtml(name)}">Invite</button>` : ""}
-          ${hasEmail ? `<button class="btn-share-drive-member" data-action="share-drive" data-name="${escapeHtml(name)}" title="Option B: grant Drive access to ${escapeHtml(c.email)}">📁 Share</button>` : ""}
-          <button class="btn-edit-member"   data-action="edit"   data-name="${escapeHtml(name)}">Edit</button>
-          <button class="btn-delete-member" data-action="delete" data-name="${escapeHtml(name)}">✕</button>
-        </div>
-      </div>`;
+  var adminKey = generateAdminKey();
+  if (snap.exists()) {
+    // Old trip without adminKey — adopt it
+    await updateDoc(tripRef, { adminKey: adminKey });
+  } else {
+    await setDoc(tripRef, {
+      destination:    "",
+      driveFolderUrl: "",
+      members:        [],
+      adminKey:       adminKey,
+      createdAt:      serverTimestamp(),
+    });
+  }
+
+  currentTripCode = code;
+  currentRole     = "admin";
+
+  var adminUrl = BASE_URL + "?trip=" + encodeURIComponent(code) + "&admin=" + encodeURIComponent(adminKey);
+  document.getElementById("admin-link-display").textContent = adminUrl;
+  document.getElementById("admin-link-box").classList.remove("hidden");
+  document.getElementById("copy-admin-link-btn").onclick = function() {
+    copyText(adminUrl, "Admin link copied!");
+  };
+
+  subscribeAndShow(code);
+});
+
+// ── ADMIN VERIFICATION ───────────────────────────────────────────────────────
+async function verifyAndJoinAsAdmin() {
+  var tripRef = doc(db, "trips", urlTrip);
+  var snap    = await getDoc(tripRef);
+  if (!snap.exists()) {
+    showError("Trip \"" + urlTrip + "\" not found. Check the link.");
+    return;
+  }
+  var data = snap.data();
+  if (data.adminKey && data.adminKey !== urlAdmin) {
+    showError("Invalid admin key. Use the correct admin link.");
+    return;
+  }
+  // If trip has no adminKey yet, set it now
+  if (!data.adminKey) {
+    await updateDoc(tripRef, { adminKey: urlAdmin });
+  }
+  subscribeAndShow(urlTrip);
+}
+
+// ── PARTICIPANT JOIN ─────────────────────────────────────────────────────────
+async function joinAsParticipant() {
+  subscribeAndShow(urlTrip);
+}
+
+// ── TRIP SUBSCRIPTION & SHOW ─────────────────────────────────────────────────
+function subscribeAndShow(tripCode) {
+  currentTripCode = tripCode;
+
+  // Hide setup card
+  document.getElementById("setup-card").classList.add("hidden");
+
+  // Show role bar
+  var bar = document.getElementById("role-bar");
+  if (currentRole === "admin") {
+    bar.textContent = "👑 Admin • Trip: " + tripCode;
+    bar.className   = "role-bar admin-bar";
+    document.getElementById("admin-panel-toggle").classList.remove("hidden");
+  } else {
+    bar.textContent = "👤 " + (currentName || "Participant") + " • Trip: " + tripCode;
+    bar.className   = "role-bar participant-bar";
+  }
+  bar.classList.remove("hidden");
+
+  // Show main sections
+  ["trip-info-card","nav-card","loc-card","talk-card","drive-card","expense-card"].forEach(function(id) {
+    document.getElementById(id).classList.remove("hidden");
+  });
+  if (currentRole === "admin") {
+    document.getElementById("admin-card").classList.remove("hidden");
+    document.getElementById("danger-card").classList.remove("hidden");
+  }
+
+  // Subscribe to trip doc
+  if (unsubTrip) unsubTrip();
+  unsubTrip = onSnapshot(doc(db, "trips", tripCode), function(snap) {
+    if (!snap.exists()) return;
+    latestTripData = snap.data();
+    renderTripInfo();
+    renderAdminPanel();
+    renderSplitCheckboxes();
+    populatePaidByDropdown();
+  });
+
+  // Subscribe to expenses
+  subscribeExpenses(tripCode);
+}
+
+// ── TRIP INFO RENDER ─────────────────────────────────────────────────────────
+function renderTripInfo() {
+  var d = latestTripData || {};
+  var el = document.getElementById("trip-info-content");
+
+  if (currentRole === "admin" || currentRole === "setup") {
+    var adminUrl = BASE_URL + "?trip=" + encodeURIComponent(currentTripCode)
+                            + "&admin=" + encodeURIComponent(d.adminKey || urlAdmin);
+    el.innerHTML = [
+      '<label>Destination</label>',
+      '<input id="destination" type="text" value="' + esc(d.destination || "") + '" placeholder="e.g. Goa, India" />',
+      '<label>Shared Google Drive folder link</label>',
+      '<input id="drive-folder" type="url" value="' + esc(d.driveFolderUrl || "") + '" placeholder="Paste the shared folder URL" />',
+      d.driveFolderUrl ? '<div class="link-box" style="margin-top:8px"><a href="' + esc(d.driveFolderUrl) + '" target="_blank" class="btn-secondary" style="display:inline-block;margin-top:0;text-decoration:none;padding:8px 14px;font-size:0.85rem">&#x1F4C1; Open Drive Folder &#x2197;</a></div>' : '',
+      '<button id="save-trip-btn" class="btn-secondary" style="margin-top:12px">&#x1F4BE; Save Trip Details</button>',
+    ].join("");
+    document.getElementById("save-trip-btn").addEventListener("click", saveTripDetails);
+  } else {
+    // Participant: read-only
+    el.innerHTML = [
+      '<div class="trip-detail-ro"><span>Welcome</span><strong>Hello, ' + esc(currentName) + '! 👋</strong></div>',
+      '<div class="trip-detail-ro"><span>Trip code</span><strong>' + esc(currentTripCode) + '</strong></div>',
+      '<div class="trip-detail-ro"><span>Destination</span><strong>' + esc(d.destination || "Not set yet") + '</strong></div>',
+      d.driveFolderUrl
+        ? '<a href="' + esc(d.driveFolderUrl) + '" target="_blank" class="btn-secondary" style="display:block;margin-top:10px;text-decoration:none;text-align:center">&#x1F4F7; Open Shared Drive Folder</a>'
+        : '<p class="hint">Shared Drive folder not set yet.</p>',
+    ].join("");
+  }
+}
+
+async function saveTripDetails() {
+  var dest  = (document.getElementById("destination")  || {}).value || "";
+  var drive = (document.getElementById("drive-folder") || {}).value || "";
+  try {
+    await updateDoc(doc(db, "trips", currentTripCode), {
+      destination:    dest.trim(),
+      driveFolderUrl: drive.trim(),
+    });
+    toast("Trip details saved.");
+  } catch(e) { toast("Save failed: " + e.message); }
+}
+
+// ── ADMIN PANEL TOGGLE ───────────────────────────────────────────────────────
+var adminPanelVisible = true;
+document.getElementById("admin-panel-toggle").addEventListener("click", function() {
+  var card = document.getElementById("admin-card");
+  adminPanelVisible = !adminPanelVisible;
+  card.style.display = adminPanelVisible ? "" : "none";
+});
+
+// ── ADMIN PANEL RENDER ───────────────────────────────────────────────────────
+function renderAdminPanel() {
+  if (currentRole !== "admin") return;
+  var list    = document.getElementById("admin-member-list");
+  var members = getMembers();
+  var contacts = getMemberContacts();
+
+  if (members.length === 0) {
+    list.innerHTML = '<p class="hint">No members yet. Add names below.</p>';
+    return;
+  }
+
+  list.innerHTML = members.map(function(name) {
+    var pUrl = BASE_URL + "?trip=" + encodeURIComponent(currentTripCode) + "&name=" + encodeURIComponent(name);
+    var c    = contacts[name] || {};
+    return [
+      '<div class="admin-member-row">',
+        '<div class="member-name-row">',
+          '<span class="member-name">' + esc(name) + '</span>',
+          '<div class="member-actions">',
+            '<button class="btn-edit-member" data-action="edit" data-name="' + esc(name) + '">Edit</button>',
+            '<button class="btn-delete-member" data-action="delete" data-name="' + esc(name) + '">✕</button>',
+          '</div>',
+        '</div>',
+        '<div class="member-link-row">',
+          '<span class="link-mini">' + esc(pUrl) + '</span>',
+          '<button class="btn-micro btn-micro-copy" data-action="copy-link" data-url="' + esc(pUrl) + '" data-name="' + esc(name) + '">📋</button>',
+          '<button class="btn-micro btn-micro-wa" data-action="whatsapp" data-name="' + esc(name) + '" data-url="' + esc(pUrl) + '" data-phone="' + esc(c.phone || "") + '">💬</button>',
+        '</div>',
+      '</div>',
+    ].join("");
   }).join("");
 }
 
-document.getElementById("admin-member-list").addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-action]");
+document.getElementById("admin-member-list").addEventListener("click", async function(ev) {
+  var btn    = ev.target.closest("[data-action]");
   if (!btn) return;
-  const action = btn.dataset.action;
-  const name = btn.dataset.name;
+  var action = btn.dataset.action;
+  var name   = btn.dataset.name;
 
-  if (action === "delete") {
-    const names = getNameOptions().filter((n) => n !== name);
-    saveNameOptions(names);
-    deleteMemberContact(name);
-    renderNameOptions();
-    renderAdminPanel();
-    toast(`${name} removed.`);
-
+  if (action === "copy-link") {
+    copyText(btn.dataset.url, "Link for " + name + " copied!");
+  } else if (action === "whatsapp") {
+    sendInvite(name, btn.dataset.phone, btn.dataset.url);
   } else if (action === "edit") {
-    const newName = prompt(`Rename "${name}" to:`, name);
+    var newName = prompt("Rename member:", name);
     if (!newName || newName.trim() === name) return;
-    const trimmed = newName.trim();
-    const names = getNameOptions().map((n) => (n === name ? trimmed : n));
-    saveNameOptions(names);
-    // migrate contact info to new name
-    const contacts = getMemberContacts();
-    if (contacts[name]) {
-      contacts[trimmed] = contacts[name];
-      delete contacts[name];
-      localStorage.setItem("gtb_memberContacts", JSON.stringify(contacts));
-    }
-    renderNameOptions();
-    renderAdminPanel();
-    toast(`Renamed to ${trimmed}.`);
-
-  } else if (action === "invite") {
-    sendInvite(name);
-
-  } else if (action === "share-drive") {
-    // Option B: copy member's email to clipboard, then open the Drive folder
-    // so the admin can paste it into Drive's "Share" dialog in one step.
-    const c = getMemberContacts()[name];
-    const email = c?.email || "";
-    const driveUrl = latestTripData?.driveFolderUrl ||
-                     document.getElementById("drive-folder").value.trim();
-
-    if (!driveUrl) return toast("Save your Drive folder URL in Trip Setup first.");
-    if (!email)    return toast("No email stored for this member.");
-
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(email)
-        .then(() => toast(`📋 ${email} copied! Opening Drive — paste into the Share box.`))
-        .catch(() => toast(`Share with: ${email} — opening Drive now.`));
-    } else {
-      // Fallback for browsers without clipboard API
-      prompt(`Copy this email, then paste it into Drive's Share dialog:`, email);
-    }
-    // Small delay so the toast is visible before Drive opens
-    setTimeout(() => window.open(driveUrl, "_blank"), 600);
+    newName = newName.trim();
+    var members = getMembers().map(function(m) { return m === name ? newName : m; });
+    await updateDoc(doc(db, "trips", currentTripCode), { members: members });
+    toast(name + " renamed to " + newName + ".");
+  } else if (action === "delete") {
+    if (!confirm("Remove " + name + " from trip?")) return;
+    var members = getMembers().filter(function(m) { return m !== name; });
+    await updateDoc(doc(db, "trips", currentTripCode), { members: members });
+    toast(name + " removed.");
   }
 });
 
-document.getElementById("admin-add-btn").addEventListener("click", () => {
-  const input = document.getElementById("admin-new-name");
-  const name = input.value.trim();
-  if (!name) return toast("Enter a name first.");
-  const names = getNameOptions();
-  if (names.includes(name)) return toast(`${name} is already in the list.`);
-  names.push(name);
-  saveNameOptions(names);
-  renderNameOptions();
-  renderAdminPanel();
-  input.value = "";
-  toast(`${name} added.`);
+document.getElementById("admin-add-btn").addEventListener("click", addMember);
+document.getElementById("admin-new-name").addEventListener("keydown", function(e) {
+  if (e.key === "Enter") { e.preventDefault(); addMember(); }
 });
 
-document.getElementById("admin-contacts-btn").addEventListener("click", async () => {
-  if (!("contacts" in navigator && "ContactsManager" in window)) {
-    toast("Contact picker isn't supported on this browser. Try Chrome on Android.");
+async function addMember() {
+  var input = document.getElementById("admin-new-name");
+  var name  = input.value.trim();
+  if (!name) return;
+  var members = getMembers();
+  if (members.includes(name)) { toast(name + " already added."); return; }
+  members.push(name);
+  await updateDoc(doc(db, "trips", currentTripCode), { members: members });
+  input.value = "";
+  toast(name + " added.");
+}
+
+document.getElementById("admin-contacts-btn").addEventListener("click", async function() {
+  if (!navigator.contacts || !navigator.contacts.select) {
+    toast("Contacts API not available on this device/browser.");
     return;
   }
   try {
-    const results = await navigator.contacts.select(["name", "tel", "email"], { multiple: false });
-    if (!results || results.length === 0) return;
-
-    const contact = results[0];
-    const pickedName = (contact.name?.[0] || "").trim();
-    const phone = (contact.tel?.[0] || "").replace(/\s+/g, "");
-    const email = contact.email?.[0] || "";
-
-    if (!pickedName) return toast("Contact has no name — please add them manually.");
-
-    const names = getNameOptions();
-    if (!names.includes(pickedName)) {
-      names.push(pickedName);
-      saveNameOptions(names);
-      renderNameOptions();
+    var res = await navigator.contacts.select(["name","tel","email"], { multiple: false });
+    if (!res || res.length === 0) return;
+    var c    = res[0];
+    var name = (c.name && c.name[0]) ? c.name[0].trim() : "";
+    if (!name) { toast("No name found for this contact."); return; }
+    var phone = (c.tel   && c.tel[0])   ? c.tel[0].replace(/\D/g, "") : "";
+    var email = (c.email && c.email[0]) ? c.email[0].trim()            : "";
+    saveMemberContact(name, { phone: phone, email: email });
+    var members = getMembers();
+    if (!members.includes(name)) {
+      members.push(name);
+      await updateDoc(doc(db, "trips", currentTripCode), { members: members });
     }
-    if (phone || email) saveMemberContact(pickedName, { phone, email });
-    renderAdminPanel();
-    toast(`${pickedName} added. Sending invite…`);
-    sendInvite(pickedName);
-
-  } catch (err) {
-    toast("Couldn't open contacts: " + err.message);
-  }
+    var pUrl = BASE_URL + "?trip=" + encodeURIComponent(currentTripCode) + "&name=" + encodeURIComponent(name);
+    sendInvite(name, phone, pUrl);
+    toast(name + " added.");
+  } catch(e) { toast("Could not access contacts."); }
 });
 
-function sendInvite(memberName) {
-  const tripCode = currentTripCode || "(ask organiser for code)";
-  const appUrl = "https://ankanmblr-glitch.github.io/group-travel-buddy/";
-  const driveUrl = latestTripData?.driveFolderUrl ||
-                   document.getElementById("drive-folder").value.trim();
-  const driveSection = driveUrl
-    ? `\n📁 Access our shared photo folder: ${driveUrl}`
-    : "";
-  const message =
-    `Ankan has invited you on this new exciting road trip! 🚗\n` +
-    `Join us on Group Travel Buddy with trip code: *${tripCode}*\n` +
-    `Open the app here: ${appUrl}` +
-    driveSection;
-
-  const contacts = getMemberContacts();
-  const c = contacts[memberName];
-  const phone = c?.phone?.replace(/\D/g, "") || "";
-
+function sendInvite(name, phone, participantUrl) {
+  var drive = (latestTripData && latestTripData.driveFolderUrl) ? latestTripData.driveFolderUrl : "";
+  var msg   = "Hi " + name + "! You have been invited on a road trip! 🚗\n"
+            + "Join Group Travel Buddy with trip code: *" + currentTripCode + "*\n"
+            + "Your personal app link: " + participantUrl
+            + (drive ? "\n📁 Shared photos folder: " + drive : "");
   if (phone) {
-    // Direct WhatsApp link to this contact's number
-    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
+    window.open("https://wa.me/" + phone.replace(/\D/g,"") + "?text=" + encodeURIComponent(msg), "_blank");
   } else if (navigator.share) {
-    navigator.share({ text: message }).catch(() => {});
+    navigator.share({ title: "Trip invite", text: msg });
   } else {
-    // Fallback: general WhatsApp share (user picks contact inside WhatsApp)
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
+    copyText(msg, "Invite message copied!");
   }
 }
 
-// ---- Helpers ---------------------------------------------------------------
-function toast(message) {
-  const el = document.createElement("div");
-  el.className = "toast";
-  el.textContent = message;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2500);
+function getMemberContacts() {
+  try { return JSON.parse(localStorage.getItem("gtb_contacts") || "{}"); } catch(e) { return {}; }
+}
+function saveMemberContact(name, info) {
+  var c = getMemberContacts();
+  c[name] = info;
+  localStorage.setItem("gtb_contacts", JSON.stringify(c));
 }
 
-function getNameOptions() {
-  const raw = localStorage.getItem("gtb_participantNames");
-  return raw ? JSON.parse(raw) : ["AA", "BB", "CC", "DD", "EE", "FF"];
-}
-
-function saveNameOptions(names) {
-  localStorage.setItem("gtb_participantNames", JSON.stringify(names));
-}
-
-function renderNameOptions() {
-  const select = document.getElementById("your-name");
-  const names = getNameOptions();
-  select.innerHTML = names.map((n) => `<option value="${n}">${n}</option>`).join("");
-  if (currentName && names.includes(currentName)) {
-    select.value = currentName;
-  }
-}
-
-// ---- Trip setup -------------------------------------------------------------
-document.getElementById("add-name-btn").addEventListener("click", () => {
-  const input = document.getElementById("new-name");
-  const name = input.value.trim();
-  if (!name) return;
-  const names = getNameOptions();
-  if (!names.includes(name)) {
-    names.push(name);
-    saveNameOptions(names);
-    renderNameOptions();
-    document.getElementById("your-name").value = name;
-  }
-  input.value = "";
-});
-
-document.getElementById("join-trip-btn").addEventListener("click", () => {
-  const code = document.getElementById("trip-code").value.trim().toLowerCase().replace(/\s+/g, "-");
-  const name = document.getElementById("your-name").value;
-  if (!code) return toast("Enter a trip code first.");
-  if (!name) return toast("Pick or add your name first.");
-  currentName = name;
-  localStorage.setItem("gtb_name", name);
-  joinTrip(code);
-});
-
-async function joinTrip(code, opts = {}) {
-  if (!currentUid) return; // wait for anonymous auth
-  currentTripCode = code;
-  localStorage.setItem("gtb_tripCode", code);
-  document.getElementById("trip-code").value = code;
-  document.getElementById("trip-details").classList.remove("hidden");
-
-  const tripRef = doc(db, "trips", code);
-  const snap = await getDoc(tripRef);
-  if (!snap.exists()) {
-    await setDoc(tripRef, {
-      destination: "",
-      driveFolderUrl: "",
-      createdAt: serverTimestamp(),
-    });
-    if (!opts.silent) toast(`Trip "${code}" created. Share this code with your group.`);
-  } else if (!opts.silent) {
-    toast(`Joined trip "${code}".`);
-  }
-
-  if (unsubscribeTrip) unsubscribeTrip();
-  unsubscribeTrip = onSnapshot(tripRef, (docSnap) => {
-    latestTripData = docSnap.data() || {};
-    document.getElementById("destination").value = latestTripData.destination || "";
-    document.getElementById("drive-folder").value = latestTripData.driveFolderUrl || "";
-    updateDriveTip();
-  });
-
-  subscribeExpenses(code);
-}
-
-// Show Drive tip box whenever the Drive folder URL field has a value
-function updateDriveTip() {
-  const url = document.getElementById("drive-folder").value.trim();
-  const tip = document.getElementById("drive-tip");
-  tip.style.display = url ? "block" : "none";
-}
-document.getElementById("drive-folder").addEventListener("input", updateDriveTip);
-
-// Option A: "Open Drive →" button opens the folder so admin can change sharing mode
-document.getElementById("drive-open-share-btn").addEventListener("click", () => {
-  const url = document.getElementById("drive-folder").value.trim() ||
-              latestTripData?.driveFolderUrl;
-  if (!url) return toast("Paste a Drive folder URL first.");
-  window.open(url, "_blank");
-});
-
-document.getElementById("save-trip-btn").addEventListener("click", async () => {
-  if (!currentTripCode) return toast("Join a trip first.");
-  const destination = document.getElementById("destination").value.trim();
-  const driveFolderUrl = document.getElementById("drive-folder").value.trim();
-  await updateDoc(doc(db, "trips", currentTripCode), { destination, driveFolderUrl });
-  updateDriveTip();
-  toast("Trip details saved.");
-});
-
-// ---- Navigation (Google Maps deep link, no API key needed) -----------------
-document.getElementById("navigate-btn").addEventListener("click", () => {
-  const destination = (latestTripData && latestTripData.destination) || document.getElementById("destination").value;
-  if (!destination) return toast("Set a destination in Trip Setup first.");
-
-  if (!navigator.geolocation) {
-    openMapsWithoutOrigin(destination);
-    return;
-  }
-
-  toast("Getting your location…");
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const { latitude, longitude } = pos.coords;
-      const url =
-        `https://www.google.com/maps/dir/?api=1` +
-        `&origin=${latitude},${longitude}` +
-        `&destination=${encodeURIComponent(destination)}` +
-        `&travelmode=driving`;
-      window.location.href = url;
-    },
-    () => {
-      toast("Couldn't get your location — opening Maps without it.");
-      openMapsWithoutOrigin(destination);
-    },
-    { timeout: 5000 }
-  );
-});
-
-function openMapsWithoutOrigin(destination) {
-  const url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=driving`;
-  window.location.href = url;
-}
-
-// ---- Location sharing (just opens Maps) -------------------------------------
-document.getElementById("open-maps-btn").addEventListener("click", () => {
-  window.location.href = "https://www.google.com/maps";
-});
-
-// ---- Zello launch ------------------------------------------------------------
-document.getElementById("open-zello-btn").addEventListener("click", () => {
-  const isAndroid = /Android/i.test(navigator.userAgent);
-  if (isAndroid) {
-    // Use Zello's custom URL scheme — launches the app directly if installed.
-    window.location.href = "zello://";
-    // If Zello isn't installed the page won't leave, so after 2 s redirect to
-    // the Play Store. If the app DID open the window loses focus first and we
-    // cancel the timer so the user isn't bounced to the Store on return.
-    const fallbackTimer = setTimeout(() => {
-      window.location.href =
-        "https://play.google.com/store/apps/details?id=com.loudtalks";
-    }, 2000);
-    window.addEventListener("blur", () => clearTimeout(fallbackTimer), { once: true });
+// ── NAVIGATION ────────────────────────────────────────────────────────────────
+document.getElementById("navigate-btn").addEventListener("click", function() {
+  var dest = (latestTripData && latestTripData.destination) ? latestTripData.destination : "";
+  if (!dest) { toast("Destination not set yet. Admin needs to save trip details."); return; }
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(function(pos) {
+      var url = "https://www.google.com/maps/dir/?api=1"
+              + "&origin=" + pos.coords.latitude + "," + pos.coords.longitude
+              + "&destination=" + encodeURIComponent(dest)
+              + "&travelmode=driving";
+      window.open(url, "_blank");
+    }, function() { window.open("https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(dest) + "&travelmode=driving", "_blank"); });
   } else {
-    window.open("https://zello.com/", "_blank");
+    window.open("https://www.google.com/maps/dir/?api=1&destination=" + encodeURIComponent(dest) + "&travelmode=driving", "_blank");
   }
 });
 
-// ---- Drive folder open --------------------------------------------------------
-document.getElementById("open-drive-btn").addEventListener("click", () => {
-  const url = (latestTripData && latestTripData.driveFolderUrl) || document.getElementById("drive-folder").value;
-  if (!url) return toast("Paste your shared Drive folder link in Trip Setup first.");
-  window.open(url, "_blank");
+// ── LOCATION ─────────────────────────────────────────────────────────────────
+document.getElementById("open-maps-btn").addEventListener("click", function() {
+  window.open("https://maps.google.com/", "_blank");
 });
 
-// ---- Expenses -----------------------------------------------------------------
+// ── TALK (PTT) ────────────────────────────────────────────────────────────────
+document.getElementById("open-ptt-btn").addEventListener("click", function() {
+  if (/Android/i.test(navigator.userAgent)) {
+    window.location.href = "intent://launch#Intent;package=com.loudtalks;end";
+  } else {
+    toast("This button launches your push-to-talk app on Android.");
+  }
+});
+
+// ── DRIVE ────────────────────────────────────────────────────────────────────
+document.getElementById("open-drive-btn").addEventListener("click", function() {
+  var url = latestTripData && latestTripData.driveFolderUrl;
+  if (url) { window.open(url, "_blank"); }
+  else     { toast("Drive folder URL not set yet."); }
+});
+
+// ── EXPENSES — subscribe ──────────────────────────────────────────────────────
 function subscribeExpenses(tripCode) {
-  if (unsubscribeExpenses) unsubscribeExpenses();
-  const expensesRef = collection(db, "trips", tripCode, "expenses");
-  unsubscribeExpenses = onSnapshot(expensesRef, (snap) => {
-    latestExpenses = [];
-    snap.forEach((d) => latestExpenses.push({ id: d.id, ...d.data() }));
+  if (unsubExpenses) unsubExpenses();
+  var col = collection(db, "trips", tripCode, "expenses");
+  unsubExpenses = onSnapshot(col, function(snap) {
+    latestExpenses = snap.docs.map(function(d) {
+      return Object.assign({ id: d.id }, d.data());
+    });
     renderExpenses();
   });
 }
 
-function renderExpenses() {
-  const list = document.getElementById("expense-list");
-  if (latestExpenses.length === 0) {
-    list.innerHTML = `<p class="hint">No expenses added yet.</p>`;
+// ── EXPENSES — paid-by dropdown / read-only field ─────────────────────────────
+function populatePaidByDropdown() {
+  var members = getMembers();
+  var sel     = document.getElementById("exp-paidby");
+  var ro      = document.getElementById("exp-paidby-ro");
+
+  if (currentRole === "admin") {
+    sel.innerHTML = members.map(function(m) {
+      return '<option value="' + esc(m) + '">' + esc(m) + '</option>';
+    }).join("");
+    sel.classList.remove("hidden");
+    ro.classList.add("hidden");
+  } else {
+    // Participant: name is read-only
+    sel.classList.add("hidden");
+    ro.textContent = currentName;
+    ro.classList.remove("hidden");
+  }
+}
+
+// ── EXPENSES — split checkboxes ───────────────────────────────────────────────
+function renderSplitCheckboxes(preChecked) {
+  var members = getMembers();
+  var box     = document.getElementById("split-checkboxes");
+  if (members.length === 0) {
+    box.innerHTML = '<p class="hint" style="margin:4px 0">No members yet — admin must add them first.</p>';
     return;
   }
-  list.innerHTML = latestExpenses
-    .slice()
-    .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
-    .map((e) => {
-      const isMine = e.ownerUid === currentUid;
-      return `
-        <div class="expense-row" data-id="${e.id}">
-          <div>
-            <div>${escapeHtml(e.description)} — ₹${Number(e.amount).toFixed(2)}</div>
-            <div class="meta">paid by ${escapeHtml(e.paidByName)}</div>
-          </div>
-          ${isMine ? `<div class="actions">
-            <button class="delete" data-action="delete" data-id="${e.id}">Delete</button>
-          </div>` : ""}
-        </div>`;
-    })
-    .join("");
+  var checked = preChecked || members; // default: all checked
+  box.innerHTML = members.map(function(name) {
+    var isChecked = checked.includes(name);
+    return '<label class="split-cb-label">'
+         + '<input type="checkbox" name="split" value="' + esc(name) + '"' + (isChecked ? " checked" : "") + ' />'
+         + esc(name) + '</label>';
+  }).join("");
 }
 
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
+function getSplitAmong() {
+  var cbs = document.querySelectorAll('#split-checkboxes input[name="split"]:checked');
+  return Array.from(cbs).map(function(cb) { return cb.value; });
 }
 
-document.getElementById("expense-list").addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-action='delete']");
-  if (!btn) return;
-  const id = btn.dataset.id;
-  if (!currentTripCode) return;
-  await deleteDoc(doc(db, "trips", currentTripCode, "expenses", id));
-  toast("Expense deleted.");
+document.getElementById("check-all-btn").addEventListener("click", function() {
+  document.querySelectorAll('#split-checkboxes input[name="split"]').forEach(function(cb) { cb.checked = true; });
+});
+document.getElementById("check-none-btn").addEventListener("click", function() {
+  document.querySelectorAll('#split-checkboxes input[name="split"]').forEach(function(cb) { cb.checked = false; });
 });
 
-document.getElementById("expense-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!currentTripCode) return toast("Join a trip first.");
-  if (!currentUid) return toast("Still connecting, try again in a moment.");
+// ── EXPENSES — add / update form ──────────────────────────────────────────────
+document.getElementById("expense-form").addEventListener("submit", async function(ev) {
+  ev.preventDefault();
 
-  const description = document.getElementById("exp-desc").value.trim();
-  const amount = parseFloat(document.getElementById("exp-amount").value);
-  if (!description || isNaN(amount) || amount <= 0) return toast("Enter a valid description and amount.");
+  var desc      = document.getElementById("exp-desc").value.trim();
+  var amount    = parseFloat(document.getElementById("exp-amount").value);
+  var paidBy    = currentRole === "admin"
+                  ? document.getElementById("exp-paidby").value
+                  : currentName;
+  var splitAmong = getSplitAmong();
 
-  await addDoc(collection(db, "trips", currentTripCode, "expenses"), {
-    description,
-    amount,
-    paidByName: currentName,
-    ownerUid: currentUid,
-    createdAt: serverTimestamp(),
+  if (!desc || isNaN(amount) || amount <= 0) { toast("Fill in description and amount."); return; }
+  if (!paidBy) { toast("Select who paid."); return; }
+  if (splitAmong.length === 0) { toast("Select at least one person to split among."); return; }
+
+  var col = collection(db, "trips", currentTripCode, "expenses");
+
+  if (editingExpenseId) {
+    // Update
+    var existing = latestExpenses.find(function(e) { return e.id === editingExpenseId; });
+    var canEdit  = currentRole === "admin" || (existing && existing.ownerUid === currentUid);
+    if (!canEdit) { toast("You can only edit your own expenses."); return; }
+
+    try {
+      await updateDoc(doc(db, "trips", currentTripCode, "expenses", editingExpenseId), {
+        description:   desc,
+        amount:        amount,
+        paidByName:    paidBy,
+        splitAmong:    splitAmong,
+        lastUpdatedBy: currentRole === "admin" ? ("admin/" + (currentName || "Admin")) : currentName,
+        lastUpdatedAt: serverTimestamp(),
+      });
+      toast("Expense updated.");
+      cancelEdit();
+    } catch(e) { toast("Update failed: " + e.message); }
+
+  } else {
+    // Create
+    try {
+      await addDoc(col, {
+        description: desc,
+        amount:      amount,
+        paidByName:  paidBy,
+        splitAmong:  splitAmong,
+        ownerUid:    currentUid,
+        createdBy:   currentRole === "admin" ? ("admin/" + (currentName || "Admin")) : currentName,
+        createdAt:   serverTimestamp(),
+        lastUpdatedBy: null,
+        lastUpdatedAt: null,
+      });
+      document.getElementById("exp-desc").value   = "";
+      document.getElementById("exp-amount").value = "";
+      renderSplitCheckboxes(); // reset to all checked
+      toast("Expense added.");
+    } catch(e) { toast("Save failed: " + e.message); }
+  }
+});
+
+function startEdit(expense) {
+  editingExpenseId = expense.id;
+  document.getElementById("exp-desc").value   = expense.description || "";
+  document.getElementById("exp-amount").value = expense.amount || "";
+  if (currentRole === "admin") {
+    document.getElementById("exp-paidby").value = expense.paidByName || "";
+  }
+  renderSplitCheckboxes(expense.splitAmong && expense.splitAmong.length > 0
+    ? expense.splitAmong : getMembers());
+  document.getElementById("edit-mode-banner").classList.remove("hidden");
+  document.getElementById("expense-submit-btn").textContent = "Update Expense";
+  document.getElementById("expense-cancel-btn").classList.remove("hidden");
+  document.getElementById("expense-form").scrollIntoView({ behavior: "smooth" });
+}
+
+function cancelEdit() {
+  editingExpenseId = null;
+  document.getElementById("expense-form").reset();
+  renderSplitCheckboxes();
+  document.getElementById("edit-mode-banner").classList.add("hidden");
+  document.getElementById("expense-submit-btn").textContent = "Add Expense";
+  document.getElementById("expense-cancel-btn").classList.add("hidden");
+  if (currentRole === "admin") {
+    populatePaidByDropdown();
+  }
+}
+
+document.getElementById("expense-cancel-btn").addEventListener("click", cancelEdit);
+
+// ── EXPENSES — render list ────────────────────────────────────────────────────
+function renderExpenses() {
+  var list = document.getElementById("expense-list");
+  if (latestExpenses.length === 0) {
+    list.innerHTML = '<p class="hint" style="text-align:center">No expenses yet.</p>';
+    return;
+  }
+
+  // Sort by createdAt ascending (oldest first)
+  var sorted = latestExpenses.slice().sort(function(a, b) {
+    var ta = a.createdAt && a.createdAt.seconds ? a.createdAt.seconds : 0;
+    var tb = b.createdAt && b.createdAt.seconds ? b.createdAt.seconds : 0;
+    return ta - tb;
   });
 
-  document.getElementById("expense-form").reset();
+  list.innerHTML = sorted.map(function(e) {
+    var canEdit   = currentRole === "admin" || e.ownerUid === currentUid;
+    var members   = getMembers();
+    var among     = (e.splitAmong && e.splitAmong.length > 0) ? e.splitAmong : members;
+    var allMembers = members.length > 0 && among.length === members.length
+                   && members.every(function(m) { return among.includes(m); });
+    var splitStr  = allMembers ? "all" : among.join(", ");
+    var auditStr  = "";
+    if (e.createdBy) auditStr += "Added by " + e.createdBy + (e.createdAt ? " · " + fmtDate(e.createdAt) : "");
+    if (e.lastUpdatedBy) auditStr += " | Edited by " + e.lastUpdatedBy;
+
+    return [
+      '<div class="expense-row">',
+        '<div style="flex:1">',
+          '<div><strong>' + esc(e.description) + '</strong> — ₹' + Number(e.amount || 0).toFixed(2) + '</div>',
+          '<div class="meta">Paid by ' + esc(e.paidByName || "?") + '</div>',
+          '<div class="expense-split-info">Split: ' + esc(splitStr) + '</div>',
+          auditStr ? '<div class="expense-audit">' + esc(auditStr) + '</div>' : '',
+        '</div>',
+        canEdit ? [
+          '<div class="actions" style="display:flex;gap:4px;flex-shrink:0">',
+            '<button class="edit" data-id="' + e.id + '">✏️</button>',
+            '<button class="delete" data-id="' + e.id + '">🗑️</button>',
+          '</div>',
+        ].join("") : '',
+      '</div>',
+    ].join("");
+  }).join("");
+}
+
+document.getElementById("expense-list").addEventListener("click", async function(ev) {
+  var editBtn = ev.target.closest("button.edit");
+  var delBtn  = ev.target.closest("button.delete");
+
+  if (editBtn) {
+    var e = latestExpenses.find(function(x) { return x.id === editBtn.dataset.id; });
+    if (e) startEdit(e);
+  }
+
+  if (delBtn) {
+    var e = latestExpenses.find(function(x) { return x.id === delBtn.dataset.id; });
+    if (!e) return;
+    var canDel = currentRole === "admin" || e.ownerUid === currentUid;
+    if (!canDel) { toast("You can only delete your own expenses."); return; }
+    if (!confirm("Delete \"" + e.description + "\"?")) return;
+    try {
+      await deleteDoc(doc(db, "trips", currentTripCode, "expenses", e.id));
+      toast("Expense deleted.");
+    } catch(err) { toast("Delete failed: " + err.message); }
+  }
 });
 
-// ---- Settlement ------------------------------------------------------------
-document.getElementById("calculate-btn").addEventListener("click", () => {
-  const participants = getNameOptions();
-  if (latestExpenses.length === 0) return toast("Add at least one expense first.");
+// ── SEE ALL EXPENSES ──────────────────────────────────────────────────────────
+var seeAllOpen = false;
+document.getElementById("see-all-btn").addEventListener("click", function() {
+  seeAllOpen = !seeAllOpen;
+  var view = document.getElementById("all-expenses-view");
+  document.getElementById("see-all-btn").textContent = seeAllOpen ? "🔼 Hide Expenses" : "📋 See All Expenses";
+  if (!seeAllOpen) { view.classList.add("hidden"); view.innerHTML = ""; return; }
 
-  const result = calculateSettlement(latestExpenses, participants);
-  const resultEl = document.getElementById("settlement-result");
-
-  if (result.transactions.length === 0) {
-    resultEl.innerHTML = `<p><strong>Total: ₹${result.total.toFixed(2)}</strong> — everyone is already even, no payments needed.</p>`;
+  if (latestExpenses.length === 0) {
+    view.innerHTML = '<p class="hint" style="margin-top:8px">No expenses recorded yet.</p>';
+    view.classList.remove("hidden");
     return;
   }
 
-  resultEl.innerHTML =
-    `<p><strong>Total: ₹${result.total.toFixed(2)}</strong> (₹${result.perPersonShare.toFixed(2)} per person)</p>` +
-    result.transactions
-      .map((t) => `<div class="settlement-line">${escapeHtml(t.from)} pays ${escapeHtml(t.to)} <strong>₹${t.amount.toFixed(2)}</strong></div>`)
-      .join("");
+  // Group by paidByName
+  var grouped = {};
+  var totals  = {};
+  latestExpenses.forEach(function(e) {
+    var n = e.paidByName || "?";
+    if (!grouped[n]) { grouped[n] = []; totals[n] = 0; }
+    grouped[n].push(e);
+    totals[n] += Number(e.amount || 0);
+  });
+
+  var grandTotal = latestExpenses.reduce(function(s,e) { return s + Number(e.amount||0); }, 0);
+  var members    = getMembers();
+
+  var html = ['<div class="see-all-view">'];
+  Object.keys(grouped).sort().forEach(function(name) {
+    html.push('<div class="see-all-person">');
+    html.push('<div class="see-all-person-header">👤 ' + esc(name) + ' — Total: ₹' + totals[name].toFixed(2) + '</div>');
+    grouped[name].forEach(function(e) {
+      var among = (e.splitAmong && e.splitAmong.length > 0) ? e.splitAmong : members;
+      var allM  = members.length > 0 && among.length === members.length;
+      html.push('<div class="see-all-expense-row">');
+      html.push('<div>' + esc(e.description) + '<br><span class="see-all-split-tag">split: ' + esc(allM ? "all" : among.join(", ")) + '</span></div>');
+      html.push('<div>₹' + Number(e.amount||0).toFixed(2) + '</div>');
+      html.push('</div>');
+    });
+    html.push('</div>');
+  });
+  html.push('<div style="border-top:1px solid #ddd;padding-top:8px;font-weight:700;text-align:right">Grand Total: ₹' + grandTotal.toFixed(2) + '</div>');
+  html.push('</div>');
+
+  view.innerHTML = html.join("");
+  view.classList.remove("hidden");
 });
 
-// ---- Init --------------------------------------------------------------------
-renderNameOptions();
-if (currentTripCode) document.getElementById("trip-code").value = currentTripCode;
+// ── SETTLEMENT ────────────────────────────────────────────────────────────────
+document.getElementById("calculate-btn").addEventListener("click", function() {
+  var members = getMembers();
+  if (members.length === 0) { toast("No members added yet."); return; }
+  if (latestExpenses.length === 0) { toast("No expenses recorded yet."); return; }
+
+  var result = calculateSettlement(latestExpenses, members);
+  var el     = document.getElementById("settlement-result");
+
+  // Check if any expense has partial splits
+  var hasPartial = latestExpenses.some(function(e) {
+    return e.splitAmong && e.splitAmong.length > 0 && e.splitAmong.length !== members.length;
+  });
+
+  var html = ['<p><strong>Total: ₹' + result.total.toFixed(2) + '</strong>'];
+  if (!hasPartial) {
+    html.push(' &nbsp;(₹' + result.perPersonShare.toFixed(2) + ' per person)');
+  }
+  html.push('</p>');
+
+  if (result.transactions.length === 0) {
+    html.push('<div class="settlement-line">✅ All settled up! No payments needed.</div>');
+  } else {
+    result.transactions.forEach(function(t) {
+      html.push('<div class="settlement-line">💸 <strong>' + esc(t.from) + '</strong> pays <strong>' + esc(t.to) + '</strong> ₹' + t.amount.toFixed(2) + '</div>');
+    });
+  }
+
+  el.innerHTML = html.join("");
+});
+
+// ── ADMIN DANGER ZONE ─────────────────────────────────────────────────────────
+document.getElementById("delete-expenses-btn").addEventListener("click", async function() {
+  if (!confirm("Delete ALL expenses? This cannot be undone.")) return;
+  try {
+    var col   = collection(db, "trips", currentTripCode, "expenses");
+    var snap  = await getDocs(col);
+    var batch = writeBatch(db);
+    snap.docs.forEach(function(d) { batch.delete(d.ref); });
+    await batch.commit();
+    toast("All expenses deleted.");
+  } catch(e) { toast("Error: " + e.message); }
+});
+
+document.getElementById("delete-trip-btn").addEventListener("click", async function() {
+  if (!confirm("Delete the ENTIRE trip and all its data? This cannot be undone.")) return;
+  if (!confirm("Last chance — permanently delete trip \"" + currentTripCode + "\" and all expenses?")) return;
+  try {
+    var col   = collection(db, "trips", currentTripCode, "expenses");
+    var snap  = await getDocs(col);
+    var batch = writeBatch(db);
+    snap.docs.forEach(function(d) { batch.delete(d.ref); });
+    batch.delete(doc(db, "trips", currentTripCode));
+    await batch.commit();
+    toast("Trip deleted. Redirecting...");
+    setTimeout(function() { window.location.href = BASE_URL; }, 2000);
+  } catch(e) { toast("Error: " + e.message); }
+});
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+function getMembers() {
+  return (latestTripData && Array.isArray(latestTripData.members))
+    ? latestTripData.members : [];
+}
+
+function esc(s) {
+  return String(s || "")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;");
+}
+
+function toast(msg) {
+  var t = document.createElement("div");
+  t.textContent = msg;
+  Object.assign(t.style, {
+    position:"fixed", bottom:"20px", left:"50%", transform:"translateX(-50%)",
+    background:"rgba(0,0,0,0.75)", color:"#fff", padding:"10px 18px",
+    borderRadius:"20px", fontSize:"0.88rem", zIndex:9999, textAlign:"center",
+    maxWidth:"90vw", boxShadow:"0 2px 8px rgba(0,0,0,0.3)",
+  });
+  document.body.appendChild(t);
+  setTimeout(function() { t.remove(); }, 2800);
+}
+
+function copyText(text, successMsg) {
+  navigator.clipboard.writeText(text)
+    .then(function() { toast(successMsg || "Copied!"); })
+    .catch(function() { toast("Copy failed — please copy manually."); });
+}
+
+function fmtDate(ts) {
+  if (!ts) return "";
+  var d = ts.toDate ? ts.toDate() : new Date((ts.seconds || 0) * 1000);
+  return d.toLocaleDateString("en-IN", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+}
+
+function generateAdminKey() {
+  return Math.random().toString(36).slice(2,10) + Math.random().toString(36).slice(2,6);
+}
+
+function showError(msg) {
+  var main = document.querySelector("main");
+  main.innerHTML = '<div class="card" style="text-align:center"><p style="color:var(--danger);font-weight:700">' + esc(msg) + '</p><p class="hint">Contact the trip admin for the correct link.</p></div>';
+}

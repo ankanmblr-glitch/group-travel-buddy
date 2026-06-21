@@ -1,78 +1,109 @@
 // ============================================================================
-// SETTLEMENT ENGINE — pure functions, no Firebase/DOM dependency.
-// Takes a list of expenses and a list of participant names, returns the
-// minimum set of payments needed to settle all debts.
+// SETTLEMENT ENGINE (v2) — pure functions, no Firebase/DOM dependency.
+//
+// Supports per-expense "splitAmong" so an expense can be shared by a subset
+// of the group rather than always dividing among everyone.
+//
+// When splitAmong is absent or empty, the expense splits equally among ALL
+// participants (backward-compatible with v1 expenses).
 // ============================================================================
 
 /**
- * @param {Array<{description:string, amount:number, paidByName:string}>} expenses
+ * @param {Array<{
+ *   description: string,
+ *   amount: number,
+ *   paidByName: string,
+ *   splitAmong?: string[]  // who shares this expense; defaults to all participants
+ * }>} expenses
  * @param {Array<string>} participantNames
  * @returns {{
  *   total: number,
- *   perPersonShare: number,
+ *   perPersonShare: number,   // approximate; only exact when all splits are equal
  *   paidByPerson: Record<string, number>,
  *   netByPerson: Record<string, number>,
  *   transactions: Array<{from:string, to:string, amount:number}>
  * }}
  */
 export function calculateSettlement(expenses, participantNames) {
-  const EPSILON = 0.01;
+  const EPSILON = 0.005;
 
   if (!participantNames || participantNames.length === 0) {
     throw new Error("At least one participant is required.");
   }
 
   const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
-  const perPersonShare = total / participantNames.length;
 
-  const paidByPerson = {};
-  participantNames.forEach((name) => (paidByPerson[name] = 0));
-  expenses.forEach((e) => {
-    if (paidByPerson[e.paidByName] === undefined) {
-      // Someone paid who isn't in the declared participant list — still
-      // count their payment so totals stay correct, but flag for the caller.
-      paidByPerson[e.paidByName] = 0;
-    }
-    paidByPerson[e.paidByName] += Number(e.amount || 0);
-  });
-
-  // net > 0 means this person is owed money (creditor); net < 0 means they owe (debtor)
+  // net > 0: this person is owed money (creditor)
+  // net < 0: this person owes money (debtor)
   const netByPerson = {};
-  Object.keys(paidByPerson).forEach((name) => {
-    netByPerson[name] = round2(paidByPerson[name] - perPersonShare);
+  participantNames.forEach(function(n) { netByPerson[n] = 0; });
+
+  // How much each person paid out of pocket (for reporting)
+  const paidByPerson = {};
+  participantNames.forEach(function(n) { paidByPerson[n] = 0; });
+
+  expenses.forEach(function(e) {
+    var amount = Number(e.amount || 0);
+    if (!amount) return;
+
+    var paidBy = e.paidByName;
+
+    // Determine who shares this expense
+    var among = (e.splitAmong && e.splitAmong.length > 0)
+      ? e.splitAmong
+      : participantNames;
+    var share = amount / among.length;
+
+    // Credit the payer the full amount
+    if (netByPerson[paidBy] === undefined) netByPerson[paidBy] = 0;
+    netByPerson[paidBy] += amount;
+
+    paidByPerson[paidBy] = (paidByPerson[paidBy] || 0) + amount;
+
+    // Debit each sharer their portion
+    among.forEach(function(n) {
+      if (netByPerson[n] === undefined) netByPerson[n] = 0;
+      netByPerson[n] -= share;
+    });
   });
 
-  const transactions = greedySettle(netByPerson, EPSILON);
+  var transactions = greedySettle(netByPerson, EPSILON);
+
+  // perPersonShare is only accurate when all expenses split equally among all
+  // participants. Provided for display convenience.
+  var perPersonShare = participantNames.length > 0 ? total / participantNames.length : 0;
 
   return {
     total: round2(total),
     perPersonShare: round2(perPersonShare),
-    paidByPerson,
-    netByPerson,
-    transactions,
+    paidByPerson: paidByPerson,
+    netByPerson: netByPerson,
+    transactions: transactions,
   };
 }
 
 function greedySettle(netByPerson, epsilon) {
-  // Work on a mutable copy: [name, net][]
-  const balances = Object.entries(netByPerson).map(([name, net]) => ({ name, net }));
-  const transactions = [];
+  // Mutable copy of balances
+  var balances = Object.keys(netByPerson).map(function(name) {
+    return { name: name, net: netByPerson[name] };
+  });
+  var transactions = [];
+  var safety = 0;
+  var maxIter = balances.length * balances.length + 10;
 
-  let safetyCounter = 0;
-  const maxIterations = balances.length * balances.length + 10;
+  while (safety++ < maxIter) {
+    // Largest creditor and largest debtor
+    var creditor = balances.reduce(function(a, b) { return b.net > a.net ? b : a; }, balances[0]);
+    var debtor   = balances.reduce(function(a, b) { return b.net < a.net ? b : a; }, balances[0]);
 
-  while (safetyCounter++ < maxIterations) {
-    // Largest creditor (most positive) and largest debtor (most negative)
-    let creditor = balances.reduce((a, b) => (b.net > a.net ? b : a), balances[0]);
-    let debtor = balances.reduce((a, b) => (b.net < a.net ? b : a), balances[0]);
+    if (creditor.net < epsilon || debtor.net > -epsilon) break;
 
-    if (creditor.net < epsilon || debtor.net > -epsilon) break; // everyone settled
-
-    const amount = Math.min(creditor.net, -debtor.net);
+    var amount = Math.min(creditor.net, -debtor.net);
     transactions.push({ from: debtor.name, to: creditor.name, amount: round2(amount) });
 
-    creditor.net = round2(creditor.net - amount);
-    debtor.net = round2(debtor.net + amount);
+    // Update without rounding to avoid accumulated drift across iterations
+    creditor.net -= amount;
+    debtor.net   += amount;
   }
 
   return transactions;

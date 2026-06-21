@@ -13,137 +13,152 @@
 <body>
 
 <header class="app-header">
-  <h1>🚗 Group Travel Buddy</h1>
+  <h1>&#x1F697; Group Travel Buddy</h1>
   <div style="display:flex;align-items:center;gap:8px">
-    <div id="connection-status" class="status-pill">connecting…</div>
-    <button id="admin-toggle-btn" class="btn-admin-toggle" title="Admin: Manage Members">👑</button>
+    <div id="connection-status" class="status-pill">connecting&#x2026;</div>
+    <button id="admin-panel-toggle" class="btn-admin-toggle hidden" title="Toggle admin panel">&#x1F451;</button>
   </div>
 </header>
 
+<!-- Role identity bar (shown after joining) -->
+<div id="role-bar" class="role-bar hidden"></div>
+
 <main>
 
-  <!-- TRIP SETUP -->
+  <!-- ═══════════════════════════════════════════════════════════
+       SETUP MODE (shown when no URL params — first-time admin)
+  ════════════════════════════════════════════════════════════ -->
   <section class="card" id="setup-card">
-    <h2>1. Trip Setup</h2>
-    <p class="hint">Whoever sets this up first shares the <strong>Trip Code</strong> with the group (e.g. over WhatsApp). Everyone else just enters the same code to join.</p>
-
-    <label for="trip-code">Trip Code</label>
-    <input id="trip-code" type="text" placeholder="e.g. goa-2026" autocomplete="off" />
-
-    <label for="your-name">Your Name</label>
-    <select id="your-name"></select>
-    <div class="row-inline">
-      <input id="new-name" type="text" placeholder="Add a name (e.g. AA)" autocomplete="off" />
-      <button id="add-name-btn" class="btn-secondary">Add</button>
-    </div>
-
-    <button id="join-trip-btn" class="btn-primary">Join / Create Trip</button>
-
-    <div id="trip-details" class="hidden">
-      <label for="destination">Destination (for navigation)</label>
-      <input id="destination" type="text" placeholder="e.g. Goa, India" autocomplete="off" />
-
-      <label for="drive-folder">Shared Google Drive folder link</label>
-      <input id="drive-folder" type="url" placeholder="Paste the shared folder URL here" autocomplete="off" />
-
-      <div class="drive-tip" id="drive-tip" style="display:none">
-        <div class="drive-tip-row">
-          <span>
-            <strong>Option A — easiest:</strong> set this folder to
-            <em>"Anyone with the link can add files"</em> in Drive.
-            Everyone who gets the invite link can upload instantly, no extra step.
-          </span>
-          <button id="drive-open-share-btn" class="btn-drive-open">Open Drive →</button>
-        </div>
-        <div class="drive-tip-divider"></div>
-        <span class="drive-tip-b">
-          <strong>Option B — selective:</strong> keep the folder private and use
-          the <em>"📁 Share Drive"</em> button next to each member in the
-          👑 Admin panel to grant access one person at a time.
-        </span>
-      </div>
-
-      <button id="save-trip-btn" class="btn-secondary">Save Trip Details</button>
+    <h2>&#x1F195; Create a New Trip</h2>
+    <p class="hint">You are setting up as <strong>admin</strong>. Enter a trip code, create the trip, then add members from the admin panel below.</p>
+    <label for="setup-trip-code">Trip Code</label>
+    <input id="setup-trip-code" type="text" placeholder="e.g. goa-2026" autocomplete="off" />
+    <button id="create-trip-btn" class="btn-primary">Create Trip as Admin</button>
+    <div id="admin-link-box" class="link-box hidden">
+      <p class="hint" style="margin-top:10px"><strong>&#x1F4CE; Bookmark your admin link</strong> — share it with no one; it gives full admin access:</p>
+      <div class="link-display" id="admin-link-display"></div>
+      <button id="copy-admin-link-btn" class="btn-secondary" style="margin-top:8px">&#x1F4CB; Copy Admin Link</button>
+      <p class="hint" style="margin-top:8px">Add members in the &#x1F451; panel below to generate their personal participant links.</p>
     </div>
   </section>
 
-  <!-- ADMIN: MEMBER MANAGEMENT -->
-  <section class="card" id="admin-card" style="display:none">
+  <!-- ═══════════════════════════════════════════════════════════
+       SECTION 1 — TRIP DETAILS (rendered by JS based on role)
+  ════════════════════════════════════════════════════════════ -->
+  <section class="card hidden" id="trip-info-card">
+    <h2>1. Trip Details</h2>
+    <div id="trip-info-content"></div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       ADMIN PANEL — Members & Links (admin only)
+  ════════════════════════════════════════════════════════════ -->
+  <section class="card hidden" id="admin-card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-      <h2 style="margin:0">👑 Members</h2>
+      <h2 style="margin:0">&#x1F451; Members &amp; Links</h2>
       <span class="admin-badge">Admin</span>
     </div>
-    <p class="hint">Add, edit, or remove trip members. Use contacts to send them an invite on WhatsApp.</p>
-
+    <p class="hint">Manage trip members. Each member gets a personal link — share it via WhatsApp.</p>
     <div id="admin-member-list"></div>
-
     <div class="row-inline" style="margin-top:14px">
-      <input id="admin-new-name" type="text" placeholder="Member name" autocomplete="off" />
-      <button id="admin-add-btn" class="btn-icon">＋</button>
+      <input id="admin-new-name" type="text" placeholder="Member name (e.g. SS)" autocomplete="off" />
+      <button id="admin-add-btn" class="btn-icon">&#xFF0B;</button>
     </div>
-
-    <button id="admin-contacts-btn" class="btn-secondary">📱 Add from Contacts &amp; Invite</button>
+    <button id="admin-contacts-btn" class="btn-secondary">&#x1F4F1; Add from Contacts</button>
   </section>
 
-  <!-- NAVIGATION -->
-  <section class="card">
+  <!-- 2. NAVIGATE -->
+  <section class="card hidden" id="nav-card">
     <h2>2. Navigate</h2>
-    <p class="hint">Opens Google Maps with your current location as the start point and the trip destination as the endpoint.</p>
-    <button id="navigate-btn" class="btn-primary btn-large">📍 Start Navigation</button>
+    <p class="hint">Opens Google Maps with your current location as start and the trip destination as endpoint.</p>
+    <button id="navigate-btn" class="btn-primary btn-large">&#x1F4CD; Start Navigation</button>
   </section>
 
-  <!-- LOCATION SHARING -->
-  <section class="card">
+  <!-- 3. LOCATION SHARING -->
+  <section class="card hidden" id="loc-card">
     <h2>3. Location Sharing</h2>
-    <p class="hint">Before the trip, make sure every participant has turned on <strong>Live Location sharing</strong> with the group inside Google Maps (Google Maps → profile photo → Location sharing). There's no way for any third-party app to read that data — this button just jumps you into Maps to check it.</p>
-    <button id="open-maps-btn" class="btn-secondary btn-large">🗺️ Open Google Maps</button>
+    <p class="hint">Make sure every participant has turned on <strong>Live Location sharing</strong> inside Google Maps (Maps &#x2192; profile photo &#x2192; Location sharing). This button takes you there to check.</p>
+    <button id="open-maps-btn" class="btn-secondary btn-large">&#x1F5FA;&#xFE0F; Open Google Maps</button>
   </section>
 
-  <!-- COMMUNICATION -->
-  <section class="card">
-    <h2>4. Talk (Zello)</h2>
-    <p class="hint">Opens the Zello app (install it free from the Play Store if you haven't already). Tap your shared channel inside Zello to talk.</p>
-    <button id="open-zello-btn" class="btn-secondary btn-large">🎙️ Talk to Friends</button>
+  <!-- 4. TALK -->
+  <section class="card hidden" id="talk-card">
+    <h2>4. Talk to Friends</h2>
+    <p class="hint">Launches your push-to-talk app so you can speak hands-free with the group while driving.</p>
+    <button id="open-ptt-btn" class="btn-secondary btn-large">&#x1F399;&#xFE0F; Talk to Friends</button>
   </section>
 
-  <!-- MEDIA -->
-  <section class="card">
+  <!-- 5. DRIVE -->
+  <section class="card hidden" id="drive-card">
     <h2>5. Photos &amp; Videos</h2>
-    <p class="hint">Opens your group's shared Google Drive folder, where you can upload photos/videos directly using Drive's own picker.</p>
-    <button id="open-drive-btn" class="btn-secondary btn-large">📷 Open Shared Drive Folder</button>
+    <p class="hint">Opens the shared Google Drive folder for uploading photos and videos.</p>
+    <button id="open-drive-btn" class="btn-secondary btn-large">&#x1F4F7; Open Shared Drive Folder</button>
   </section>
 
-  <!-- EXPENSES -->
-  <section class="card">
+  <!-- 6. EXPENSES -->
+  <section class="card hidden" id="expense-card">
     <h2>6. Expenses</h2>
 
     <form id="expense-form">
+      <div id="edit-mode-banner" class="edit-banner hidden">&#x270F;&#xFE0F; Editing expense</div>
+
       <label for="exp-desc">Description</label>
       <input id="exp-desc" type="text" placeholder="e.g. Hotel, Fuel, Lunch" required />
 
-      <label for="exp-amount">Amount</label>
+      <label for="exp-amount">Amount (&#x20B9;)</label>
       <input id="exp-amount" type="number" min="0" step="0.01" placeholder="0.00" required />
 
-      <button type="submit" class="btn-primary">Add Expense</button>
+      <div id="paid-by-wrapper">
+        <label>Paid by</label>
+        <select id="exp-paidby"></select>
+        <div id="exp-paidby-ro" class="value-readonly hidden"></div>
+      </div>
+
+      <div id="split-among-wrapper">
+        <div class="split-header">
+          <label style="margin:0">Split among</label>
+          <div>
+            <button type="button" id="check-all-btn" class="btn-micro">All</button>
+            <button type="button" id="check-none-btn" class="btn-micro">None</button>
+          </div>
+        </div>
+        <div id="split-checkboxes" class="split-checkboxes-grid"></div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button type="submit" id="expense-submit-btn" class="btn-primary" style="margin-top:0;flex:1">Add Expense</button>
+        <button type="button" id="expense-cancel-btn" class="btn-secondary hidden" style="margin-top:0;width:auto;padding:10px 16px">Cancel</button>
+      </div>
     </form>
 
-    <div id="expense-list"></div>
+    <button id="see-all-btn" class="btn-secondary" style="margin-top:12px">&#x1F4CB; See All Expenses</button>
+    <div id="all-expenses-view" class="hidden"></div>
 
-    <button id="calculate-btn" class="btn-primary btn-large">🧮 Calculate &amp; Split</button>
+    <div id="expense-list" style="margin-top:14px"></div>
+
+    <button id="calculate-btn" class="btn-primary btn-large" style="margin-top:14px">&#x1F9EE; Calculate &amp; Split</button>
     <div id="settlement-result"></div>
+  </section>
+
+  <!-- ADMIN DANGER ZONE -->
+  <section class="card danger-card hidden" id="danger-card">
+    <h2>&#x26A0;&#xFE0F; Trip Reset</h2>
+    <p class="hint">These actions permanently delete data from the database and cannot be undone.</p>
+    <button id="delete-expenses-btn" class="btn-danger">&#x1F5D1;&#xFE0F; Delete All Expenses</button>
+    <button id="delete-trip-btn" class="btn-danger" style="margin-top:8px">&#x1F4A3; Delete Entire Trip &amp; All Data</button>
   </section>
 
 </main>
 
 <footer>
-  <p>Works offline once loaded. Built for occasional road trips — no ads, no tracking, no recurring cost.</p>
+  <p>Works offline once loaded &mdash; no ads, no tracking, no recurring cost.</p>
 </footer>
 
 <script type="module" src="app.js"></script>
 <script>
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+    window.addEventListener('load', function() {
+      navigator.serviceWorker.register('sw.js').catch(function() {});
     });
   }
 </script>

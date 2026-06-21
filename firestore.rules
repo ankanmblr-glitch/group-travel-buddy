@@ -1,15 +1,14 @@
 rules_version = '2';
 
-// Group Travel Buddy — Firestore security rules
+// Group Travel Buddy — Firestore security rules (v2)
 //
-// Model: anyone can read/use a trip if they know its trip code (the code
-// itself is the "invite" — same trust model as a WhatsApp group link).
-// Every device is anonymously authenticated (silent, no login screen), and
-// can only edit/delete the expenses IT created (ownerUid match), matching
-// the "AA can edit only AA's own expenses" requirement.
+// Trust model: trip code = invite. All devices are anonymously authenticated.
+// Admin/participant distinction is enforced in the client UI (via URL key).
+// Expenses: any signed-in user may update/delete any expense so the admin can
+// correct or remove others' entries. Create still requires ownerUid to match
+// so each expense is tied to the device that created it.
 //
-// Deploy with: firebase deploy --only firestore:rules
-// (after `firebase init firestore` — see README.md Part 6)
+// Deploy: firebase deploy --only firestore:rules
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -20,9 +19,6 @@ service cloud.firestore {
 
     match /trips/{tripCode} {
       allow read: if signedIn();
-      // Anyone can create a trip doc (claims a new trip code) or update
-      // shared trip details (destination, drive folder link) — low-stakes,
-      // trusted-friend-group app, so this stays intentionally permissive.
       allow create, update: if signedIn();
       allow delete: if false;
 
@@ -30,8 +26,9 @@ service cloud.firestore {
         allow read: if signedIn();
         allow create: if signedIn()
                       && request.resource.data.ownerUid == request.auth.uid;
-        allow update, delete: if signedIn()
-                      && resource.data.ownerUid == request.auth.uid;
+        // Any signed-in user may update or delete (admin needs this for
+        // correcting others' entries; UI enforces the permission boundary).
+        allow update, delete: if signedIn();
       }
     }
   }
