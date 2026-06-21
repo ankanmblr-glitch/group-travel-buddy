@@ -83,16 +83,18 @@ document.getElementById("create-trip-btn").addEventListener("click", async funct
   var tripRef = doc(db, "trips", code);
   var snap    = await getDoc(tripRef);
 
-  if (snap.exists() && snap.data().adminKey) {
-    toast("Trip already exists. Use your admin link to access it.");
-    return;
-  }
+  var adminKey;
 
-  var adminKey = generateAdminKey();
-  if (snap.exists()) {
-    // Old trip without adminKey — adopt it
+  if (snap.exists() && snap.data().adminKey) {
+    // Trip already exists — just redirect to its admin URL
+    adminKey = snap.data().adminKey;
+  } else if (snap.exists()) {
+    // Old trip without adminKey — generate and save one
+    adminKey = generateAdminKey();
     await updateDoc(tripRef, { adminKey: adminKey });
   } else {
+    // Brand new trip
+    adminKey = generateAdminKey();
     await setDoc(tripRef, {
       destination:    "",
       driveFolderUrl: "",
@@ -102,17 +104,9 @@ document.getElementById("create-trip-btn").addEventListener("click", async funct
     });
   }
 
-  currentTripCode = code;
-  currentRole     = "admin";
-
-  var adminUrl = BASE_URL + "?trip=" + encodeURIComponent(code) + "&admin=" + encodeURIComponent(adminKey);
-  document.getElementById("admin-link-display").textContent = adminUrl;
-  document.getElementById("admin-link-box").classList.remove("hidden");
-  document.getElementById("copy-admin-link-btn").onclick = function() {
-    copyText(adminUrl, "Admin link copied!");
-  };
-
-  subscribeAndShow(code);
+  // Redirect to the admin URL — browser URL bar becomes the admin link,
+  // and the trip-info card will display it permanently once loaded.
+  window.location.href = BASE_URL + "?trip=" + encodeURIComponent(code) + "&admin=" + encodeURIComponent(adminKey);
 });
 
 // ── ADMIN VERIFICATION ───────────────────────────────────────────────────────
