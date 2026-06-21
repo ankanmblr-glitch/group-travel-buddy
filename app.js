@@ -192,6 +192,12 @@ function renderTripInfo() {
     var adminUrl = BASE_URL + "?trip=" + encodeURIComponent(currentTripCode)
                             + "&admin=" + encodeURIComponent(d.adminKey || urlAdmin);
     el.innerHTML = [
+      // Admin link box — always visible so admin can copy/bookmark it
+      '<div class="link-box">',
+        '<p class="hint" style="margin:0 0 6px"><strong>&#x1F511; Your admin link</strong> — bookmark this, keep it private:</p>',
+        '<div class="link-display" id="admin-url-display">' + esc(adminUrl) + '</div>',
+        '<button id="copy-admin-link-btn" class="btn-secondary" style="margin-top:8px;font-size:0.82rem">&#x1F4CB; Copy Admin Link</button>',
+      '</div>',
       '<label>Destination</label>',
       '<input id="destination" type="text" value="' + esc(d.destination || "") + '" placeholder="e.g. Goa, India" />',
       '<label>Shared Google Drive folder link</label>',
@@ -199,6 +205,9 @@ function renderTripInfo() {
       d.driveFolderUrl ? '<div class="link-box" style="margin-top:8px"><a href="' + esc(d.driveFolderUrl) + '" target="_blank" class="btn-secondary" style="display:inline-block;margin-top:0;text-decoration:none;padding:8px 14px;font-size:0.85rem">&#x1F4C1; Open Drive Folder &#x2197;</a></div>' : '',
       '<button id="save-trip-btn" class="btn-secondary" style="margin-top:12px">&#x1F4BE; Save Trip Details</button>',
     ].join("");
+    document.getElementById("copy-admin-link-btn").addEventListener("click", function() {
+      copyText(adminUrl, "Admin link copied!");
+    });
     document.getElementById("save-trip-btn").addEventListener("click", saveTripDetails);
   } else {
     // Participant: read-only
