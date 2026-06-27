@@ -183,59 +183,113 @@ function subscribeAndShow(tripCode) {
 }
 
 // ── BULLETIN BOARD ────────────────────────────────────────────────────────────
+var editingBulletinId = null;
+
 function renderBulletin() {
   var d       = latestTripData || {};
   var notices = Array.isArray(d.notices) ? d.notices : [];
   var el      = document.getElementById("bulletin-content");
   if (!el) return;
 
+  // Preserve whatever the admin had typed in the editor across snapshot re-renders
+  var savedEditorHtml = "";
+  var existingEditor  = document.getElementById("bulletin-editor");
+  if (existingEditor) savedEditorHtml = existingEditor.innerHTML;
+
   if (currentRole === "admin") {
     var listHtml = notices.length === 0
-      ? '<p class="hint" style="margin:4px 0">No announcements yet. Add one below.</p>'
-      : '<div class="bulletin-admin-list">'
+      ? '<p class="hint" style="margin:4px 0 10px">No announcements yet.</p>'
+      : '<div id="bulletin-admin-list">'
           + notices.map(function(n) {
               return '<div class="bulletin-item">'
-                + '<span class="bulletin-text">' + esc(n.text) + '</span>'
+                + '<div class="bulletin-item-body">' + sanitizeHtml(n.html || esc(n.text || "")) + '</div>'
                 + '<div class="bulletin-actions">'
-                + '<button class="btn-micro btn-micro-copy bul-edit" data-id="' + esc(n.id) + '" title="Edit">&#x270F;&#xFE0F;</button>'
-                + '<button class="btn-micro bul-delete" data-id="' + esc(n.id) + '" title="Delete" style="background:#fdf0ef;color:var(--danger)">&#x2715;</button>'
+                + '<button class="btn-micro btn-micro-copy bul-edit" data-id="' + esc(n.id) + '">&#x270F;&#xFE0F; Edit</button>'
+                + '<button class="btn-micro bul-delete" data-id="' + esc(n.id) + '" style="background:#fdf0ef;color:var(--danger)">&#x2715;</button>'
                 + '</div></div>';
             }).join("")
           + '</div>';
 
     el.innerHTML = listHtml
-      + '<div class="bulletin-add-row">'
-      + '<input id="bulletin-input" type="text" placeholder="New announcement&#x2026;" />'
-      + '<button id="bulletin-add-btn" class="btn-icon">&#xFF0B;</button>'
+      + '<div class="rte-container">'
+      + '<p class="hint" style="margin:0 0 6px;font-size:0.78rem"><strong>&#x2795; Add / edit notice</strong></p>'
+      + '<div class="rte-toolbar">'
+      + '<button class="rte-btn" data-cmd="bold" title="Bold"><b>B</b></button>'
+      + '<button class="rte-btn" data-cmd="italic" title="Italic"><i>I</i></button>'
+      + '<button class="rte-btn" data-cmd="underline" title="Underline"><u>U</u></button>'
+      + '<span class="rte-sep"></span>'
+      + '<button class="rte-btn rte-link" title="Insert clickable link">&#x1F517; Link</button>'
+      + '<button class="rte-btn rte-img-url" title="Insert image URL as thumbnail">&#x1F5BC;&#xFE0F; Image</button>'
+      + '<button class="rte-btn rte-yt" title="Insert YouTube thumbnail">&#x25B6;&#xFE0F; YouTube</button>'
+      + '<button class="rte-btn rte-fb" title="Insert Facebook Watch card">&#x1F4D8; FB Watch</button>'
+      + '</div>'
+      + '<div class="rte-editor" id="bulletin-editor" contenteditable="true" data-placeholder="Type your notice here&#x2026;"></div>'
+      + '<div style="display:flex;gap:8px;margin-top:8px">'
+      + '<button id="bulletin-save-btn" class="btn-primary" style="margin-top:0;flex:1">&#x1F4BE; Add Notice</button>'
+      + '<button id="bulletin-cancel-btn" class="btn-secondary hidden" style="margin-top:0;width:auto;padding:10px 16px">Cancel</button>'
+      + '</div>'
       + '</div>';
 
+    // Restore editor content (preserves unsaved draft across snapshot re-fires)
+    var newEditor = document.getElementById("bulletin-editor");
+    if (newEditor && savedEditorHtml) {
+      newEditor.innerHTML = savedEditorHtml;
+    }
+    if (editingBulletinId !== null) {
+      var sb = document.getElementById("bulletin-save-btn");
+      var cb = document.getElementById("bulletin-cancel-btn");
+      if (sb) sb.textContent = "💾 Update Notice";
+      if (cb) cb.classList.remove("hidden");
+    }
+
   } else {
-    // Participant: read-only bullet list
+    // Participant: fully rendered rich HTML, read-only
     if (notices.length === 0) {
       el.innerHTML = '<p class="hint" style="margin:4px 0">No announcements yet.</p>';
     } else {
-      el.innerHTML = '<ul class="bulletin-list">'
+      el.innerHTML = '<div class="bulletin-participant-list">'
         + notices.map(function(n) {
-            return '<li>' + esc(n.text) + '</li>';
+            return '<div class="bulletin-notice-ro">'
+              + '<span class="bulletin-bullet">&#x2022;</span>'
+              + '<div class="bulletin-notice-content">' + sanitizeHtml(n.html || esc(n.text || "")) + '</div>'
+              + '</div>';
           }).join("")
-        + '</ul>';
+        + '</div>';
     }
   }
 }
 
-async function addBulletinItem() {
-  var input = document.getElementById("bulletin-input");
-  if (!input) return;
-  var text = input.value.trim();
-  if (!text) return;
-  var notices = Array.isArray((latestTripData || {}).notices)
-    ? latestTripData.notices.slice() : [];
-  notices.push({ id: Math.random().toString(36).slice(2, 10), text: text });
+async function saveBulletinNotice() {
+  var editor = document.getElementById("bulletin-editor");
+  if (!editor) return;
+  var html = editor.innerHTML.trim();
+  if (!html || html === "<br>" || (editor.textContent.trim() === "" && !editor.querySelector("img, a"))) {
+    toast("Notice is empty — add some text or media.");
+    return;
+  }
+  var notices  = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices.slice() : [];
+  var wasEditing = editingBulletinId !== null;
+  if (wasEditing) {
+    var eid = editingBulletinId;
+    notices = notices.map(function(n) { return n.id === eid ? { id: n.id, html: html } : n; });
+  } else {
+    notices.push({ id: Math.random().toString(36).slice(2, 10), html: html });
+  }
   try {
     await updateDoc(doc(db, "trips", currentTripCode), { notices: notices });
-    input.value = "";
-    toast("Notice added.");
+    editingBulletinId = null;
+    toast(wasEditing ? "Notice updated." : "Notice added.");
   } catch(e) { toast("Failed: " + e.message); }
+}
+
+function cancelBulletinEdit() {
+  editingBulletinId = null;
+  var editor = document.getElementById("bulletin-editor");
+  if (editor) editor.innerHTML = "";
+  var sb = document.getElementById("bulletin-save-btn");
+  var cb = document.getElementById("bulletin-cancel-btn");
+  if (sb) sb.innerHTML = "&#x1F4BE; Add Notice";
+  if (cb) cb.classList.add("hidden");
 }
 
 var bulletinListenersAttached = false;
@@ -245,32 +299,115 @@ function attachBulletinListeners() {
   var container = document.getElementById("bulletin-content");
   if (!container) return;
 
-  container.addEventListener("click", async function(ev) {
-    // Add button
-    if (ev.target.closest("#bulletin-add-btn")) {
-      addBulletinItem();
+  // mousedown on toolbar buttons — preventDefault keeps editor focus + selection intact
+  container.addEventListener("mousedown", function(e) {
+    var btn = e.target.closest(".rte-btn");
+    if (!btn) return;
+    e.preventDefault();
+
+    var editor = document.getElementById("bulletin-editor");
+    var cmd    = btn.dataset.cmd;
+
+    // ── Format: bold / italic / underline ────────────────────────────────────
+    if (cmd) {
+      document.execCommand(cmd, false, null);
       return;
     }
-    // Edit button
-    var editBtn = ev.target.closest(".bul-edit");
+
+    // ── Insert: clickable link ────────────────────────────────────────────────
+    if (btn.classList.contains("rte-link")) {
+      var url = prompt("Enter URL (e.g. https://example.com):");
+      if (!url) return;
+      url = url.trim();
+      if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+      var sel = window.getSelection();
+      if (sel && !sel.isCollapsed) {
+        document.execCommand("createLink", false, url);
+      } else {
+        document.execCommand("insertHTML", false,
+          '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(url) + "</a>");
+      }
+      if (editor) editor.querySelectorAll("a").forEach(function(a) {
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener noreferrer");
+      });
+      return;
+    }
+
+    // ── Insert: image thumbnail ───────────────────────────────────────────────
+    if (btn.classList.contains("rte-img-url")) {
+      var url = prompt("Enter image URL:");
+      if (!url) return;
+      document.execCommand("insertHTML", false,
+        '<img src="' + esc(url.trim()) + '" style="max-width:100%;border-radius:8px;margin:4px 0;display:block" alt="image" /><br>');
+      return;
+    }
+
+    // ── Insert: YouTube thumbnail ─────────────────────────────────────────────
+    if (btn.classList.contains("rte-yt")) {
+      var url = prompt("Enter YouTube URL (youtube.com/watch or youtu.be):");
+      if (!url) return;
+      var ytId = getYouTubeId(url.trim());
+      if (!ytId) { toast("Could not read YouTube video ID — check the URL."); return; }
+      document.execCommand("insertHTML", false,
+        '<a href="' + esc(url.trim()) + '" target="_blank" rel="noopener noreferrer"'
+        + ' style="display:inline-block;position:relative;margin:6px 0;border-radius:8px;overflow:hidden;text-decoration:none;max-width:320px;width:100%;">'
+        + '<img src="https://img.youtube.com/vi/' + esc(ytId) + '/hqdefault.jpg"'
+        + ' style="display:block;width:100%;border-radius:8px;" alt="YouTube Video" />'
+        + '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.25);">'
+        + '<span style="background:#ff0000;color:#fff;width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.1rem;padding-left:3px;">&#x25B6;</span>'
+        + '</div></a><br>');
+      return;
+    }
+
+    // ── Insert: Facebook Watch card ───────────────────────────────────────────
+    if (btn.classList.contains("rte-fb")) {
+      var url = prompt("Enter Facebook Watch URL:");
+      if (!url) return;
+      document.execCommand("insertHTML", false,
+        '<a href="' + esc(url.trim()) + '" target="_blank" rel="noopener noreferrer"'
+        + ' style="display:flex;align-items:center;gap:10px;background:#e7f3ff;border:1px solid #cce0ff;border-radius:8px;padding:10px 14px;margin:6px 0;text-decoration:none;color:inherit;">'
+        + '<span style="font-size:1.6rem;flex-shrink:0;">&#x1F4D8;</span>'
+        + '<div><div style="font-weight:700;font-size:0.88rem;color:#1877f2;">Facebook Watch</div>'
+        + '<div style="font-size:0.72rem;color:#6b7280;word-break:break-all;">' + esc(url.trim()) + '</div></div></a><br>');
+      return;
+    }
+  });
+
+  // click — save, cancel, edit existing, delete
+  container.addEventListener("click", async function(e) {
+    if (e.target.closest(".rte-btn")) return; // already handled by mousedown
+
+    if (e.target.closest("#bulletin-save-btn")) {
+      await saveBulletinNotice();
+      return;
+    }
+
+    if (e.target.closest("#bulletin-cancel-btn")) {
+      cancelBulletinEdit();
+      return;
+    }
+
+    var editBtn = e.target.closest(".bul-edit");
     if (editBtn) {
       var id      = editBtn.dataset.id;
       var notices = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices : [];
       var notice  = notices.find(function(n) { return n.id === id; });
       if (!notice) return;
-      var newText = prompt("Edit notice:", notice.text);
-      if (newText === null || newText.trim() === "") return;
-      var updated = notices.map(function(n) {
-        return n.id === id ? { id: n.id, text: newText.trim() } : n;
-      });
-      try {
-        await updateDoc(doc(db, "trips", currentTripCode), { notices: updated });
-        toast("Notice updated.");
-      } catch(e) { toast("Failed: " + e.message); }
+      editingBulletinId = id;
+      var editor = document.getElementById("bulletin-editor");
+      if (editor) {
+        editor.innerHTML = notice.html || "";
+        editor.scrollIntoView({ behavior: "smooth" });
+      }
+      var sb = document.getElementById("bulletin-save-btn");
+      var cb = document.getElementById("bulletin-cancel-btn");
+      if (sb) sb.innerHTML = "💾 Update Notice";
+      if (cb) cb.classList.remove("hidden");
       return;
     }
-    // Delete button
-    var delBtn = ev.target.closest(".bul-delete");
+
+    var delBtn = e.target.closest(".bul-delete");
     if (delBtn) {
       var id      = delBtn.dataset.id;
       var notices = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices : [];
@@ -279,14 +416,7 @@ function attachBulletinListeners() {
       try {
         await updateDoc(doc(db, "trips", currentTripCode), { notices: updated });
         toast("Notice deleted.");
-      } catch(e) { toast("Failed: " + e.message); }
-    }
-  });
-
-  container.addEventListener("keydown", function(e) {
-    if (e.target.id === "bulletin-input" && e.key === "Enter") {
-      e.preventDefault();
-      addBulletinItem();
+      } catch(err) { toast("Failed: " + err.message); }
     }
   });
 
@@ -313,6 +443,8 @@ function renderTripInfo() {
       '<label>Shared Google Drive folder link</label>',
       '<input id="drive-folder" type="url" value="' + esc(d.driveFolderUrl || "") + '" placeholder="Paste the shared folder URL" />',
       d.driveFolderUrl ? '<div class="link-box" style="margin-top:8px"><a href="' + esc(d.driveFolderUrl) + '" target="_blank" class="btn-secondary" style="display:inline-block;margin-top:0;text-decoration:none;padding:8px 14px;font-size:0.85rem">&#x1F4C1; Open Drive Folder &#x2197;</a></div>' : '',
+      '<label>WhatsApp Group Invite Link</label>',
+      '<input id="whatsapp-group-url" type="url" value="' + esc(d.whatsappGroupUrl || "") + '" placeholder="https://chat.whatsapp.com/..." />',
       '<button id="save-trip-btn" class="btn-secondary" style="margin-top:12px">&#x1F4BE; Save Trip Details</button>',
     ].join("");
     document.getElementById("copy-admin-link-btn").addEventListener("click", function() {
@@ -333,12 +465,14 @@ function renderTripInfo() {
 }
 
 async function saveTripDetails() {
-  var dest  = (document.getElementById("destination")  || {}).value || "";
-  var drive = (document.getElementById("drive-folder") || {}).value || "";
+  var dest      = (document.getElementById("destination")       || {}).value || "";
+  var drive     = (document.getElementById("drive-folder")      || {}).value || "";
+  var whatsapp  = (document.getElementById("whatsapp-group-url")|| {}).value || "";
   try {
     await updateDoc(doc(db, "trips", currentTripCode), {
-      destination:    dest.trim(),
-      driveFolderUrl: drive.trim(),
+      destination:      dest.trim(),
+      driveFolderUrl:   drive.trim(),
+      whatsappGroupUrl: whatsapp.trim(),
     });
     toast("Trip details saved.");
   } catch(e) { toast("Save failed: " + e.message); }
@@ -506,6 +640,13 @@ document.getElementById("open-ptt-btn").addEventListener("click", function() {
   } else {
     toast("This button launches your push-to-talk app on Android.");
   }
+});
+
+// ── WHATSAPP GROUP ────────────────────────────────────────────────────────────
+document.getElementById("gossip-btn").addEventListener("click", function() {
+  var url = latestTripData && latestTripData.whatsappGroupUrl;
+  if (!url) { toast("WhatsApp group link not set yet — admin needs to add it in Trip Details."); return; }
+  window.open(url, "_blank");
 });
 
 // ── DRIVE ────────────────────────────────────────────────────────────────────
@@ -886,6 +1027,18 @@ function fmtDate(ts) {
   if (!ts) return "";
   var d = ts.toDate ? ts.toDate() : new Date((ts.seconds || 0) * 1000);
   return d.toLocaleDateString("en-IN", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+}
+
+function getYouTubeId(url) {
+  var m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+function sanitizeHtml(html) {
+  return String(html || "")
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, "")
+    .replace(/javascript\s*:/gi, "nojavascript:");
 }
 
 function generateAdminKey() {
