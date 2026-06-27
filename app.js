@@ -154,7 +154,7 @@ function subscribeAndShow(tripCode) {
   bar.classList.remove("hidden");
 
   // Show main sections
-  ["trip-info-card","nav-card","loc-card","talk-card","drive-card","expense-card"].forEach(function(id) {
+  ["bulletin-card","trip-info-card","nav-card","loc-card","talk-card","drive-card","expense-card"].forEach(function(id) {
     document.getElementById(id).classList.remove("hidden");
   });
   if (currentRole === "admin") {
@@ -167,6 +167,7 @@ function subscribeAndShow(tripCode) {
   unsubTrip = onSnapshot(doc(db, "trips", tripCode), function(snap) {
     if (!snap.exists()) return;
     latestTripData = snap.data();
+    renderBulletin();
     renderTripInfo();
     renderAdminPanel();
     renderSplitCheckboxes();
@@ -176,6 +177,108 @@ function subscribeAndShow(tripCode) {
   // Subscribe to expenses
   subscribeExpenses(tripCode);
 }
+
+// ── BULLETIN BOARD ────────────────────────────────────────────────────────────
+function renderBulletin() {
+  var d       = latestTripData || {};
+  var notices = Array.isArray(d.notices) ? d.notices : [];
+  var el      = document.getElementById("bulletin-content");
+  if (!el) return;
+
+  if (currentRole === "admin") {
+    var listHtml = notices.length === 0
+      ? '<p class="hint" style="margin:4px 0">No announcements yet. Add one below.</p>'
+      : '<div class="bulletin-admin-list">'
+          + notices.map(function(n) {
+              return '<div class="bulletin-item">'
+                + '<span class="bulletin-text">' + esc(n.text) + '</span>'
+                + '<div class="bulletin-actions">'
+                + '<button class="btn-micro btn-micro-copy bul-edit" data-id="' + esc(n.id) + '" title="Edit">&#x270F;&#xFE0F;</button>'
+                + '<button class="btn-micro bul-delete" data-id="' + esc(n.id) + '" title="Delete" style="background:#fdf0ef;color:var(--danger)">&#x2715;</button>'
+                + '</div></div>';
+            }).join("")
+          + '</div>';
+
+    el.innerHTML = listHtml
+      + '<div class="bulletin-add-row">'
+      + '<input id="bulletin-input" type="text" placeholder="New announcement&#x2026;" />'
+      + '<button id="bulletin-add-btn" class="btn-icon">&#xFF0B;</button>'
+      + '</div>';
+
+  } else {
+    // Participant: read-only bullet list
+    if (notices.length === 0) {
+      el.innerHTML = '<p class="hint" style="margin:4px 0">No announcements yet.</p>';
+    } else {
+      el.innerHTML = '<ul class="bulletin-list">'
+        + notices.map(function(n) {
+            return '<li>' + esc(n.text) + '</li>';
+          }).join("")
+        + '</ul>';
+    }
+  }
+}
+
+async function addBulletinItem() {
+  var input = document.getElementById("bulletin-input");
+  if (!input) return;
+  var text = input.value.trim();
+  if (!text) return;
+  var notices = Array.isArray((latestTripData || {}).notices)
+    ? latestTripData.notices.slice() : [];
+  notices.push({ id: Math.random().toString(36).slice(2, 10), text: text });
+  try {
+    await updateDoc(doc(db, "trips", currentTripCode), { notices: notices });
+    input.value = "";
+    toast("Notice added.");
+  } catch(e) { toast("Failed: " + e.message); }
+}
+
+// Single delegated listener for bulletin board (set up once)
+document.getElementById("bulletin-content").addEventListener("click", async function(ev) {
+  // Add button
+  if (ev.target.closest("#bulletin-add-btn")) {
+    addBulletinItem();
+    return;
+  }
+  // Edit button
+  var editBtn = ev.target.closest(".bul-edit");
+  if (editBtn) {
+    var id      = editBtn.dataset.id;
+    var notices = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices : [];
+    var notice  = notices.find(function(n) { return n.id === id; });
+    if (!notice) return;
+    var newText = prompt("Edit notice:", notice.text);
+    if (newText === null || newText.trim() === "") return;
+    var updated = notices.map(function(n) {
+      return n.id === id ? { id: n.id, text: newText.trim() } : n;
+    });
+    try {
+      await updateDoc(doc(db, "trips", currentTripCode), { notices: updated });
+      toast("Notice updated.");
+    } catch(e) { toast("Failed: " + e.message); }
+    return;
+  }
+  // Delete button
+  var delBtn = ev.target.closest(".bul-delete");
+  if (delBtn) {
+    var id      = delBtn.dataset.id;
+    var notices = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices : [];
+    if (!confirm("Delete this notice?")) return;
+    var updated = notices.filter(function(n) { return n.id !== id; });
+    try {
+      await updateDoc(doc(db, "trips", currentTripCode), { notices: updated });
+      toast("Notice deleted.");
+    } catch(e) { toast("Failed: " + e.message); }
+  }
+});
+
+document.getElementById("bulletin-content").addEventListener("keydown", function(e) {
+  if (e.target.id === "bulletin-input" && e.key === "Enter") {
+    e.preventDefault();
+    addBulletinItem();
+  }
+});
 
 // ── TRIP INFO RENDER ─────────────────────────────────────────────────────────
 function renderTripInfo() {
@@ -576,20 +679,26 @@ function renderExpenses() {
     return [
       '<div class="expense-row">',
         '<div style="flex:1">',
-          '<div><strong>' + esc(e.description) + '</strong> — ₹' + Number(e.amount || 0).toFixed(2) + '</div>',
+          '<div><strong>' + esc(e.description) + '</strong> — &#x20B9;' + Number(e.amount || 0).toFixed(2) + '</div>',
           '<div class="meta">Paid by ' + esc(e.paidByName || "?") + '</div>',
           '<div class="expense-split-info">Split: ' + esc(splitStr) + '</div>',
           auditStr ? '<div class="expense-audit">' + esc(auditStr) + '</div>' : '',
         '</div>',
         canEdit ? [
           '<div class="actions" style="display:flex;gap:4px;flex-shrink:0">',
-            '<button class="edit" data-id="' + e.id + '">✏️</button>',
-            '<button class="delete" data-id="' + e.id + '">🗑️</button>',
+            '<button class="edit" data-id="' + e.id + '">&#x270F;&#xFE0F;</button>',
+            '<button class="delete" data-id="' + e.id + '">&#x1F5D1;&#xFE0F;</button>',
           '</div>',
         ].join("") : '',
       '</div>',
     ].join("");
   }).join("");
+
+  // Auto-refresh settlement result if it is already visible
+  var settlementEl = document.getElementById("settlement-result");
+  if (settlementEl && settlementEl.innerHTML.trim() !== "") {
+    renderSettlement();
+  }
 }
 
 document.getElementById("expense-list").addEventListener("click", async function(ev) {
@@ -663,34 +772,43 @@ document.getElementById("see-all-btn").addEventListener("click", function() {
 });
 
 // ── SETTLEMENT ────────────────────────────────────────────────────────────────
-document.getElementById("calculate-btn").addEventListener("click", function() {
+function renderSettlement() {
   var members = getMembers();
-  if (members.length === 0) { toast("No members added yet."); return; }
-  if (latestExpenses.length === 0) { toast("No expenses recorded yet."); return; }
+  var el      = document.getElementById("settlement-result");
+  if (members.length === 0 || latestExpenses.length === 0) {
+    el.innerHTML = "";
+    return;
+  }
 
   var result = calculateSettlement(latestExpenses, members);
-  var el     = document.getElementById("settlement-result");
 
   // Check if any expense has partial splits
   var hasPartial = latestExpenses.some(function(e) {
     return e.splitAmong && e.splitAmong.length > 0 && e.splitAmong.length !== members.length;
   });
 
-  var html = ['<p><strong>Total: ₹' + result.total.toFixed(2) + '</strong>'];
+  var html = ['<p><strong>Total: &#x20B9;' + result.total.toFixed(2) + '</strong>'];
   if (!hasPartial) {
-    html.push(' &nbsp;(₹' + result.perPersonShare.toFixed(2) + ' per person)');
+    html.push(' &nbsp;(&#x20B9;' + result.perPersonShare.toFixed(2) + ' per person)');
   }
   html.push('</p>');
 
   if (result.transactions.length === 0) {
-    html.push('<div class="settlement-line">✅ All settled up! No payments needed.</div>');
+    html.push('<div class="settlement-line">&#x2705; All settled up! No payments needed.</div>');
   } else {
     result.transactions.forEach(function(t) {
-      html.push('<div class="settlement-line">💸 <strong>' + esc(t.from) + '</strong> pays <strong>' + esc(t.to) + '</strong> ₹' + t.amount.toFixed(2) + '</div>');
+      html.push('<div class="settlement-line">&#x1F4B8; <strong>' + esc(t.from) + '</strong> pays <strong>' + esc(t.to) + '</strong> &#x20B9;' + t.amount.toFixed(2) + '</div>');
     });
   }
 
   el.innerHTML = html.join("");
+}
+
+document.getElementById("calculate-btn").addEventListener("click", function() {
+  var members = getMembers();
+  if (members.length === 0) { toast("No members added yet."); return; }
+  if (latestExpenses.length === 0) { toast("No expenses recorded yet."); return; }
+  renderSettlement();
 });
 
 // ── ADMIN DANGER ZONE ─────────────────────────────────────────────────────────

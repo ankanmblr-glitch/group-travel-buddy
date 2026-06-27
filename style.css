@@ -410,6 +410,58 @@ footer {
 }
 .btn-danger:active { background: #a93226; }
 
+/* ---- Bulletin board ---- */
+.bulletin-list {
+  list-style: disc;
+  padding-left: 20px;
+  margin: 6px 0 10px;
+}
+.bulletin-list li {
+  padding: 4px 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+.bulletin-admin-list {
+  margin-bottom: 10px;
+}
+.bulletin-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.bulletin-item:last-child { border-bottom: none; }
+.bulletin-item::before {
+  content: "•";
+  color: var(--primary);
+  font-size: 1.1rem;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.bulletin-text {
+  flex: 1;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+.bulletin-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.bulletin-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+.bulletin-add-row input {
+  flex: 1;
+  margin: 0;
+}
+
 /* Trip detail rows (participant read-only) */
 .trip-detail-ro {
   background: var(--secondary);
