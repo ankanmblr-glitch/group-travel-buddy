@@ -153,14 +153,18 @@ function subscribeAndShow(tripCode) {
   }
   bar.classList.remove("hidden");
 
-  // Show main sections
+  // Show main sections (null-safe in case of stale browser cache)
   ["bulletin-card","trip-info-card","nav-card","loc-card","talk-card","drive-card","expense-card"].forEach(function(id) {
-    document.getElementById(id).classList.remove("hidden");
+    var el = document.getElementById(id);
+    if (el) el.classList.remove("hidden");
   });
   if (currentRole === "admin") {
     document.getElementById("admin-card").classList.remove("hidden");
     document.getElementById("danger-card").classList.remove("hidden");
   }
+
+  // Wire bulletin board interactions (safe: only attaches once)
+  attachBulletinListeners();
 
   // Subscribe to trip doc
   if (unsubTrip) unsubTrip();
@@ -234,51 +238,60 @@ async function addBulletinItem() {
   } catch(e) { toast("Failed: " + e.message); }
 }
 
-// Single delegated listener for bulletin board (set up once)
-document.getElementById("bulletin-content").addEventListener("click", async function(ev) {
-  // Add button
-  if (ev.target.closest("#bulletin-add-btn")) {
-    addBulletinItem();
-    return;
-  }
-  // Edit button
-  var editBtn = ev.target.closest(".bul-edit");
-  if (editBtn) {
-    var id      = editBtn.dataset.id;
-    var notices = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices : [];
-    var notice  = notices.find(function(n) { return n.id === id; });
-    if (!notice) return;
-    var newText = prompt("Edit notice:", notice.text);
-    if (newText === null || newText.trim() === "") return;
-    var updated = notices.map(function(n) {
-      return n.id === id ? { id: n.id, text: newText.trim() } : n;
-    });
-    try {
-      await updateDoc(doc(db, "trips", currentTripCode), { notices: updated });
-      toast("Notice updated.");
-    } catch(e) { toast("Failed: " + e.message); }
-    return;
-  }
-  // Delete button
-  var delBtn = ev.target.closest(".bul-delete");
-  if (delBtn) {
-    var id      = delBtn.dataset.id;
-    var notices = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices : [];
-    if (!confirm("Delete this notice?")) return;
-    var updated = notices.filter(function(n) { return n.id !== id; });
-    try {
-      await updateDoc(doc(db, "trips", currentTripCode), { notices: updated });
-      toast("Notice deleted.");
-    } catch(e) { toast("Failed: " + e.message); }
-  }
-});
+var bulletinListenersAttached = false;
 
-document.getElementById("bulletin-content").addEventListener("keydown", function(e) {
-  if (e.target.id === "bulletin-input" && e.key === "Enter") {
-    e.preventDefault();
-    addBulletinItem();
-  }
-});
+function attachBulletinListeners() {
+  if (bulletinListenersAttached) return;
+  var container = document.getElementById("bulletin-content");
+  if (!container) return;
+
+  container.addEventListener("click", async function(ev) {
+    // Add button
+    if (ev.target.closest("#bulletin-add-btn")) {
+      addBulletinItem();
+      return;
+    }
+    // Edit button
+    var editBtn = ev.target.closest(".bul-edit");
+    if (editBtn) {
+      var id      = editBtn.dataset.id;
+      var notices = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices : [];
+      var notice  = notices.find(function(n) { return n.id === id; });
+      if (!notice) return;
+      var newText = prompt("Edit notice:", notice.text);
+      if (newText === null || newText.trim() === "") return;
+      var updated = notices.map(function(n) {
+        return n.id === id ? { id: n.id, text: newText.trim() } : n;
+      });
+      try {
+        await updateDoc(doc(db, "trips", currentTripCode), { notices: updated });
+        toast("Notice updated.");
+      } catch(e) { toast("Failed: " + e.message); }
+      return;
+    }
+    // Delete button
+    var delBtn = ev.target.closest(".bul-delete");
+    if (delBtn) {
+      var id      = delBtn.dataset.id;
+      var notices = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices : [];
+      if (!confirm("Delete this notice?")) return;
+      var updated = notices.filter(function(n) { return n.id !== id; });
+      try {
+        await updateDoc(doc(db, "trips", currentTripCode), { notices: updated });
+        toast("Notice deleted.");
+      } catch(e) { toast("Failed: " + e.message); }
+    }
+  });
+
+  container.addEventListener("keydown", function(e) {
+    if (e.target.id === "bulletin-input" && e.key === "Enter") {
+      e.preventDefault();
+      addBulletinItem();
+    }
+  });
+
+  bulletinListenersAttached = true;
+}
 
 // ── TRIP INFO RENDER ─────────────────────────────────────────────────────────
 function renderTripInfo() {
@@ -694,11 +707,8 @@ function renderExpenses() {
     ].join("");
   }).join("");
 
-  // Auto-refresh settlement result if it is already visible
-  var settlementEl = document.getElementById("settlement-result");
-  if (settlementEl && settlementEl.innerHTML.trim() !== "") {
-    renderSettlement();
-  }
+  // Always auto-recalculate settlement whenever expenses change
+  renderSettlement();
 }
 
 document.getElementById("expense-list").addEventListener("click", async function(ev) {
