@@ -3,7 +3,7 @@
 // network for a moment. Firestore handles its own offline queueing for the
 // expense data separately.
 
-const CACHE_NAME = "gtb-shell-v2";
+const CACHE_NAME = "gtb-shell-v3";
 const SHELL_FILES = [
   "./",
   "./index.html",

@@ -269,11 +269,12 @@ async function saveBulletinNotice() {
   }
   var notices  = Array.isArray((latestTripData || {}).notices) ? latestTripData.notices.slice() : [];
   var wasEditing = editingBulletinId !== null;
+  var plainText = editor.textContent.trim(); // plain-text fallback for older cached clients
   if (wasEditing) {
     var eid = editingBulletinId;
-    notices = notices.map(function(n) { return n.id === eid ? { id: n.id, html: html } : n; });
+    notices = notices.map(function(n) { return n.id === eid ? { id: n.id, html: html, text: plainText } : n; });
   } else {
-    notices.push({ id: Math.random().toString(36).slice(2, 10), html: html });
+    notices.push({ id: Math.random().toString(36).slice(2, 10), html: html, text: plainText });
   }
   try {
     await updateDoc(doc(db, "trips", currentTripCode), { notices: notices });
@@ -351,7 +352,7 @@ function attachBulletinListeners() {
       if (!ytId) { toast("Could not read YouTube video ID — check the URL."); return; }
       document.execCommand("insertHTML", false,
         '<a href="' + esc(url.trim()) + '" target="_blank" rel="noopener noreferrer"'
-        + ' style="display:inline-block;position:relative;margin:6px 0;border-radius:8px;overflow:hidden;text-decoration:none;max-width:320px;width:100%;">'
+        + ' style="display:block;position:relative;margin:6px 0;border-radius:8px;overflow:hidden;text-decoration:none;max-width:320px;">'
         + '<img src="https://img.youtube.com/vi/' + esc(ytId) + '/hqdefault.jpg"'
         + ' style="display:block;width:100%;border-radius:8px;" alt="YouTube Video" />'
         + '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.25);">'
